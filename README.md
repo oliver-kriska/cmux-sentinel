@@ -3,18 +3,13 @@
 An opinionated [cmux](https://cmux.com) **custom sidebar** — a clean, monospace, Ayu-Mirage
 workspaces list with live agent states and pluggable **AI usage meters**.
 
-```
-Workspaces                          ⚡2  15:45
-─────────────────────────────────────────────
-USAGE
-🟡 5h ███████░░░ 72% 41m
-   7d ██▍░░░░░░░ 24% 2d18h
-─────────────────────────────────────────────
-▎ enaia            working · running tests
-  enaia-main       idle
-  Gettext          needs you · 2m
-  ...
-```
+<p align="center">
+  <img src="assets/sidebar.png" alt="cmux-sentinel sidebar — USAGE panel above the workspace list" width="320">
+</p>
+
+The top **USAGE** panel shows live Claude limits (5h session + 7d weekly) with smooth sub-cell
+bars — a 🟡/🔴 dot appears only when a limit gets close — and workspace rows light up green
+(working) / orange (needs you) for live agent state.
 
 It's a vibe-coded [custom sidebar](https://cmux.com/docs/custom-sidebars) (beta) plus small
 background pollers. Batteries included, easy to fork and tweak.
