@@ -1,0 +1,10 @@
+# local install backups
+*.bak.*
+.DS_Store
+
+# never commit a real, filled-in sentinel env or token
+usage-sentinels.env
+
+# private working notes — knowledge lives in the project, but stays out of the public repo
+*.local.md
+.notes/

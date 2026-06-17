@@ -1,0 +1,73 @@
+#!/bin/bash
+# install.sh — place the opinionated cmux sidebar files into your config.
+# Idempotent and non-destructive: backs up anything it would overwrite.
+# Does NOT touch any secrets and does NOT auto-edit your sentinel UUIDs —
+# follow the printed "NEXT STEPS" to finish wiring it up.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cfg="$HOME/.config/cmux"
+bak() { [ -e "$1" ] && cp "$1" "$1.bak.$(date +%s)" && echo "  backed up $1"; return 0; }
+
+echo "Installing opinionated cmux sidebar from $here"
+
+mkdir -p "$HOME/bin" "$cfg/sidebars" "$HOME/.claude/hooks" "$HOME/Library/LaunchAgents"
+
+# 1. poller
+bak "$HOME/bin/cmux-claude-usage.sh"
+install -m 0755 "$here/bin/cmux-claude-usage.sh" "$HOME/bin/cmux-claude-usage.sh"
+echo "  -> ~/bin/cmux-claude-usage.sh"
+
+# 2. sidebar
+bak "$cfg/sidebars/workspaces.swift"
+install -m 0644 "$here/sidebars/workspaces.swift" "$cfg/sidebars/workspaces.swift"
+echo "  -> ~/.config/cmux/sidebars/workspaces.swift"
+
+# 3. sentinel env (only if missing — never clobber real UUIDs)
+if [ ! -f "$cfg/usage-sentinels.env" ]; then
+  cp "$here/examples/usage-sentinels.env.example" "$cfg/usage-sentinels.env"
+  echo "  -> ~/.config/cmux/usage-sentinels.env (template — edit in your UUIDs)"
+else
+  echo "  ~/.config/cmux/usage-sentinels.env already exists, leaving it"
+fi
+
+# 4. launchd plist, templated to this user
+plist="$HOME/Library/LaunchAgents/com.cmux-claude-usage.plist"
+bak "$plist"
+sed "s#/Users/YOUR_USERNAME#$HOME#g" "$here/examples/com.cmux-claude-usage.plist" > "$plist"
+echo "  -> $plist"
+
+# 5. optional working-state hooks bridge
+if [ "${WITH_BRIDGE:-0}" = "1" ]; then
+  bak "$HOME/.claude/hooks/cmux-bridge.sh"
+  install -m 0755 "$here/hooks/cmux-bridge.sh" "$HOME/.claude/hooks/cmux-bridge.sh"
+  echo "  -> ~/.claude/hooks/cmux-bridge.sh  (register events in ~/.claude/settings.json — see README)"
+fi
+
+cat <<'NEXT'
+
+✅ Files installed. NEXT STEPS (manual — they need your input):
+
+1. Create two throwaway "sentinel" workspaces in cmux (any directory), then grab their UUIDs:
+     cmux workspace list
+     cmux sidebar-state --workspace workspace:<N> | grep '^tab='
+   Put them in  ~/.config/cmux/usage-sentinels.env  (SENTINEL_5H / SENTINEL_7D)
+   AND in       ~/.config/cmux/sidebars/workspaces.swift  ->  isUsageMeter()  (the two == checks)
+
+2. Test the poller:
+     ~/bin/cmux-claude-usage.sh --print
+     ~/bin/cmux-claude-usage.sh --update
+
+3. Load the sidebar:
+     cmux sidebar validate workspaces && cmux sidebar reload
+   then right-click the sidebar button and pick "workspaces".
+
+4. Enable external socket access for the 5-min auto-refresh — add to ~/.config/cmux/cmux.json:
+     "automation": { "socketControlMode": "automation" }
+   then FULLY RESTART cmux (reload-config does NOT apply it).
+
+5. Start the auto-refresh:
+     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cmux-claude-usage.plist
+
+(Optional working-state rows: re-run with  WITH_BRIDGE=1 ./install.sh  and wire the hooks per README.)
+NEXT
