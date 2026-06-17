@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.example.cmux-claude-usage</string>
+  <string>com.cmux-claude-usage</string>
   <key>ProgramArguments</key>
   <array>
     <string>/Users/YOUR_USERNAME/bin/cmux-claude-usage.sh</string>
