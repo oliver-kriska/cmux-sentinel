@@ -1,0 +1,29 @@
+# CI for cmux-sentinel — static checks only (no cmux on the runner, so no
+# render/parse test). Mirrors `make ci`: shellcheck + secrets guard + markdown.
+# Actions are SHA-pinned (supply-chain hygiene); shellcheck and node ship on the
+# ubuntu runner, so the only third-party action is checkout.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install markdownlint-cli
+        run: npm install -g markdownlint-cli@0.47.0
+
+      - name: shellcheck + secrets + markdown
+        run: make ci

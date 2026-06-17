@@ -1,135 +1,176 @@
 // Workspaces sidebar — flat, your manual order (by index). SF Mono.
 // Palette: Ayu Mirage (matches the terminal theme).
 //   bg #1F2430 · fg #D9D7CE · dim #8A9199 · orange #FFCC66 · blue #73D0FF
-//   green #87D96C · selection #33415E
+//   green #87D96C · red #F28779 · selection #33415E
 //
-// Three live states, driven by cmux-bridge.sh + cmux unread:
-//   working   (green)  — Claude actively working      (progress set)
-//   needs you (orange) — Claude finished/awaiting you  (unread > 0, not working)
-//   idle      (dim)    — nothing happening
+// State is modeled as TWO INDEPENDENT dimensions, each on its own row:
+//   1. Agent activity — compacting (purple) / working (green) / needs-you
+//      (orange) / idle (dim). Compacting & working are read from STATIC markers
+//      the bridge keeps at the FRONT of the TITLE ("⏳"=compacting, "⚡"=working);
+//      needs-you from `unread`. Precedence: compacting > working > needs-you > idle.
+//      (Why the title and not `progress`: cmux does NOT pass progress/description/
+//      color to custom-sidebar data on this build — proven by probe. Why STATIC:
+//      an animated marker in the title freezes cmux's sidebar — upstream #6291.
+//      The bridge ref-counts agents per workspace so multiple Claude/Codex
+//      sessions don't stomp the marker — see .claude/STATE-ARCHITECTURE.md.)
+//   2. Repo state — branch · uncommitted · PR. Independent of any agent; its
+//      own row so it never competes with activity for the line.
+// Usage meters ride hidden "sentinel" workspaces (see isUsageMeter).
 
+// ── predicates ────────────────────────────────────────────────────
 func hasPR(_ w) -> Bool {
   return w.pr != nil && w.pr.label != nil && w.pr.label != ""
 }
-
 func hasBranch(_ w) -> Bool {
   return w.branch != nil && w.branch != ""
 }
-
 func hasProgress(_ w) -> Bool {
   return w.progress != nil && w.progress.value != nil
 }
-
 func hasProgressLabel(_ w) -> Bool {
   return hasProgress(w) && w.progress.label != nil && w.progress.label != ""
 }
 
+// ── dimension 1: agent activity ───────────────────────────────────
+// "Working" is detected from a marker the bridge injects at the FRONT of the
+// TITLE ("⚡ name"). cmux does NOT pass `progress`/`description`/`color` to
+// custom-sidebar data on this build (proven by probe: progN=0/descN=0 even for
+// the selected, working workspace), so the title is the only channel — and the
+// interpreter's `.hasPrefix` works here (also proven), so we can detect it.
 func isWorking(_ w) -> Bool {
-  return hasProgress(w) && w.progress.value < 1.0
+  return w.title.hasPrefix("⚡")
 }
-
-func needsYou(_ w) -> Bool {
-  return !isWorking(w) && w.unread > 0
-}
-
+// Compacting is a distinct busy sub-state: the bridge swaps the working marker
+// for "⏳" while Claude compacts its context (PreCompact→PostCompact). Static
+// glyph on purpose — an animated/spinner marker in the title freezes cmux's
+// sidebar (upstream #6291). Precedence: compacting > working > needs-you > idle.
 func isCompacting(_ w) -> Bool {
-  return hasProgressLabel(w) && w.progress.label.contains("Compact")
+  return w.title.hasPrefix("⏳")
+}
+func needsYou(_ w) -> Bool {
+  if isWorking(w) { return false }
+  if isCompacting(w) { return false }
+  return w.unread > 0
+}
+// Show working by COLOR, not the glyph: strip the leading "⚡" marker from the
+// displayed title. `.split` keeps the rest of the name intact (spaces and all);
+// cmux trims a leading zero-width space, so a visible marker + strip is the only
+// way to get a clean title.
+func displayTitle(_ w) -> String {
+  if w.title.hasPrefix("⏳") {
+    let parts = w.title.split(separator: "⏳")
+    if parts.count > 0 { return String(parts[0]) }
+    return ""
+  }
+  if w.title.hasPrefix("⚡") {
+    let parts = w.title.split(separator: "⚡")
+    if parts.count > 0 { return String(parts[0]) }
+    return ""
+  }
+  return w.title
+}
+func workLabel(_ w) -> String {
+  if hasProgressLabel(w) { return w.progress.label }
+  return "Working…"
+}
+func activityText(_ w) -> String {
+  if isCompacting(w) { return "Compacting…" }
+  if isWorking(w) { return workLabel(w) }
+  if needsYou(w) {
+    if w.unread > 1 { return "needs you · \(w.unread)" }
+    return "needs you"
+  }
+  return "idle"
+}
+func activityColor(_ w) -> String {
+  if isCompacting(w) { return "#DFBFFF" }
+  if isWorking(w) { return "#87D96C" }
+  if needsYou(w) { return "#FFCC66" }
+  return "#8A9199"
+}
+// SF Symbol for the activity row; "" = no icon (compared with == elsewhere).
+// Working shows by colour alone (no icon — Oliver: "icon is too much, just colour").
+func activityIcon(_ w) -> String {
+  if needsYou(w) { return "bell.fill" }
+  return ""
 }
 
-// Usage meters: idle "sentinel" workspaces whose titles are driven by background
-// pollers. ONE predicate per provider (matched by exact id — the interpreter has
-// no working String .contains, and == is fine) so each provider renders its own
-// labelled section in the panel. Keep ids in sync with the poller env files.
+// ── dimension 2: repo / git state ─────────────────────────────────
+func hasRepoInfo(_ w) -> Bool {
+  if hasPR(w) { return true }
+  if hasBranch(w) { return true }
+  if w.dirty == true { return true }
+  return false
+}
+func repoText(_ w) -> String {
+  if hasPR(w) {
+    let stale = w.pr.stale == true ? " · stale" : ""
+    let d = w.dirty == true ? " · uncommitted" : ""
+    return "\(w.pr.label)\(stale)\(d)"
+  }
+  if hasBranch(w) {
+    let d = w.dirty == true ? " · uncommitted" : ""
+    return "\(w.branch)\(d)"
+  }
+  if w.dirty == true { return "uncommitted changes" }
+  return ""
+}
+func repoColor(_ w) -> String {
+  if hasPR(w) && w.pr.status == "open" { return "#73D0FF" }
+  if w.dirty == true { return "#FFCC66" }
+  return "#8A9199"
+}
+// ── usage meters (hidden sentinels) ───────────────────────────────
+// ONE predicate per provider (matched by exact id — the interpreter has no
+// working String .contains, and == is fine). Keep ids in sync with the poller.
 func isClaudeMeter(_ w) -> Bool {
   if w.id == "REPLACE_WITH_5H_SENTINEL_UUID" { return true }  // Claude — 5h session
   if w.id == "REPLACE_WITH_7D_SENTINEL_UUID" { return true }  // Claude — 7d weekly
   return false
 }
-
 // Add a provider: copy isClaudeMeter with the new sentinel id(s), add an
-// `if isCodexMeter(w) { return true }` line to isUsageMeter below, and a matching
+// `if isCodexMeter(w) { return true }` line to isUsageMeter, and a matching
 // section in the panel (search "CLAUDE USAGE").
 // func isCodexMeter(_ w) -> Bool {
 //   if w.id == "REPLACE_WITH_CODEX_SENTINEL_UUID" { return true }
 //   return false
 // }
-
-// Any meter, any provider — used only to hide sentinels from the workspace list.
 func isUsageMeter(_ w) -> Bool {
   if isClaudeMeter(w) { return true }
   // if isCodexMeter(w) { return true }
   return false
 }
 
-
-func workLabel(_ w) -> String {
-  if hasProgressLabel(w) { return w.progress.label }
-  return "Working…"
-}
-
-func hasLatestAt(_ w) -> Bool {
-  return w.latestAt != nil && w.latestAt != ""
-}
-
-func ago(_ mins) -> String {
-  if mins < 1 { return "now" }
-  if mins < 60 { return "\(mins)m" }
-  if mins < 1440 { return "\(mins / 60)h" }
-  return "\(mins / 1440)d"
-}
-
-func infoText(_ w, _ nowEpoch) -> String {
-  if isWorking(w) { return workLabel(w) }
-  let when = hasLatestAt(w) ? " · \(ago((nowEpoch - w.latestAt) / 60))" : ""
-  if needsYou(w) { return "needs you\(when)" }
-  if hasPR(w) {
-    let stale = w.pr.stale == true ? " · stale" : ""
-    return "\(w.pr.label)\(stale)\(when)"
-  }
-  if hasBranch(w) {
-    let d = w.dirty == true ? " · uncommitted" : ""
-    return "\(w.branch)\(d)\(when)"
-  }
-  if w.dirty == true { return "uncommitted changes\(when)" }
-  return "idle\(when)"
-}
-
-func infoColor(_ w) -> String {
-  if isWorking(w) { return "#87D96C" }
-  if needsYou(w) { return "#FFCC66" }
-  if hasPR(w) && w.pr.status == "open" { return "#73D0FF" }
-  if w.dirty == true { return "#FFCC66" }
-  return "#8A9199"
-}
-
+// ── row visuals ───────────────────────────────────────────────────
 func accentColor(_ w) -> String {
+  if isCompacting(w) { return "#DFBFFF" }
   if isWorking(w) { return "#87D96C" }
   if needsYou(w) { return "#FFCC66" }
   return "#73D0FF"
 }
-
 func accentOpacity(_ w) -> Double {
   if w.selected { return 1.0 }
+  if isCompacting(w) { return 0.9 }
   if isWorking(w) { return 0.9 }
   if needsYou(w) { return 0.9 }
   return 0.0
 }
-
 func rowFill(_ w) -> String {
   if w.selected { return "#33415E" }
+  if isCompacting(w) { return "#DFBFFF" }
   if isWorking(w) { return "#87D96C" }
   if needsYou(w) { return "#FFCC66" }
   return "#000000"
 }
-
 func rowFillOpacity(_ w) -> Double {
   if w.selected { return 0.85 }
+  if isCompacting(w) { return 0.12 }
   if isWorking(w) { return 0.12 }
   if needsYou(w) { return 0.08 }
   return 0.06
 }
 
-func row(_ w, _ nowEpoch) -> some View {
+func row(_ w) -> some View {
   VStack(spacing: 0) {
     Button(action: { cmux("workspace.select", workspace_id: w.id) }) {
       HStack(alignment: .top, spacing: 10) {
@@ -137,23 +178,30 @@ func row(_ w, _ nowEpoch) -> some View {
           .foregroundColor(accentColor(w))
           .opacity(accentOpacity(w))
         VStack(alignment: .leading, spacing: 2) {
-          Text(w.title)
+          Text(displayTitle(w))
             .font(.system(size: 14, design: .monospaced))
             .fontWeight(w.selected ? .bold : .medium)
             .foregroundColor(w.selected ? "#FFFFFF" : "#D9D7CE")
             .lineLimit(2).multilineTextAlignment(.leading)
+          // dimension 1 — agent activity
           HStack(spacing: 5) {
-            if isWorking(w) {
-              Image(systemName: isCompacting(w) ? "hourglass" : "bolt.fill")
-                .font(.system(size: 9)).foregroundColor("#87D96C")
+            if activityIcon(w) != "" {
+              Image(systemName: activityIcon(w)).font(.system(size: 9)).foregroundColor(activityColor(w))
             }
-            if needsYou(w) {
-              Image(systemName: "bell.fill").font(.system(size: 9)).foregroundColor("#FFCC66")
-            }
-            Text(infoText(w, nowEpoch))
+            Text(activityText(w))
               .font(.system(size: 11, design: .monospaced))
-              .foregroundColor(infoColor(w))
+              .foregroundColor(activityColor(w))
               .lineLimit(1).truncationMode(.tail)
+          }
+          // dimension 2 — repo / git state (its own row, only when present)
+          if hasRepoInfo(w) {
+            HStack(spacing: 5) {
+              Image(systemName: "arrow.triangle.branch").font(.system(size: 9)).foregroundColor("#6E7787")
+              Text(repoText(w))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(repoColor(w))
+                .lineLimit(1).truncationMode(.tail)
+            }
           }
         }
         Spacer()
@@ -172,15 +220,57 @@ func row(_ w, _ nowEpoch) -> some View {
       .padding(8)
       .background { RoundedRectangle(cornerRadius: 0).foregroundColor(rowFill(w)).opacity(rowFillOpacity(w)) }
     }
+    .contextMenu {
+      Button(action: { cmux("workspace.select", workspace_id: w.id) }) {
+        Label("Open", systemImage: "arrow.right.circle")
+      }
+      if w.pinned {
+        Button(action: { cmux("workspace.action", workspace_id: w.id, action: "unpin") }) {
+          Label("Unpin", systemImage: "pin.slash")
+        }
+      } else {
+        Button(action: { cmux("workspace.action", workspace_id: w.id, action: "pin") }) {
+          Label("Pin", systemImage: "pin")
+        }
+      }
+      Menu("Color") {
+        Button(action: { cmux("workspace.action", workspace_id: w.id, action: "set-color", color: "#FFCC66") }) { Text("Orange") }
+        Button(action: { cmux("workspace.action", workspace_id: w.id, action: "set-color", color: "#73D0FF") }) { Text("Blue") }
+        Button(action: { cmux("workspace.action", workspace_id: w.id, action: "set-color", color: "#87D96C") }) { Text("Green") }
+        Button(action: { cmux("workspace.action", workspace_id: w.id, action: "set-color", color: "#F28779") }) { Text("Red") }
+        Button(action: { cmux("workspace.action", workspace_id: w.id, action: "clear-color") }) { Text("Clear color") }
+      }
+      Button(action: { cmux("workspace.action", workspace_id: w.id, action: "move-up") }) {
+        Label("Move up", systemImage: "arrow.up")
+      }
+      Button(action: { cmux("workspace.action", workspace_id: w.id, action: "move-down") }) {
+        Label("Move down", systemImage: "arrow.down")
+      }
+      Button(action: { cmux("workspace.action", workspace_id: w.id, action: "move-top") }) {
+        Label("Move to top", systemImage: "arrow.up.to.line")
+      }
+      Divider()
+      Button(action: { cmux("workspace.close", workspace_id: w.id) }) {
+        Label("Close", systemImage: "xmark")
+      }
+    }
     Divider()
   }
 }
 
+// ── layout ────────────────────────────────────────────────────────
 VStack(alignment: .leading, spacing: 0) {
   HStack(spacing: 10) {
     Text("Workspaces").font(.system(size: 14, design: .monospaced)).bold()
       .foregroundColor("#D9D7CE")
     Spacer()
+    if workspaces.filter { isCompacting($0) }.count > 0 {
+      HStack(spacing: 4) {
+        Image(systemName: "hourglass").font(.system(size: 10)).foregroundColor("#DFBFFF")
+        Text("\(workspaces.filter { isCompacting($0) }.count)")
+          .font(.system(size: 11, design: .monospaced)).bold().foregroundColor("#DFBFFF")
+      }
+    }
     if workspaces.filter { isWorking($0) }.count > 0 {
       HStack(spacing: 4) {
         Image(systemName: "bolt.fill").font(.system(size: 10)).foregroundColor("#87D96C")
@@ -200,7 +290,7 @@ VStack(alignment: .leading, spacing: 0) {
   .padding(9)
   Divider()
 
-  // USAGE — one labelled section per provider (same component, different meters).
+  // CLAUDE USAGE — one labelled section per provider (same component reused).
   if workspaces.filter { isClaudeMeter($0) }.count > 0 {
     VStack(alignment: .leading, spacing: 6) {
       Text("CLAUDE USAGE").font(.system(size: 10, design: .monospaced)).bold().foregroundColor("#8A9199")
@@ -226,8 +316,21 @@ VStack(alignment: .leading, spacing: 0) {
   //   Divider()
   // }
 
-  ForEach(workspaces.filter { !isUsageMeter($0) }.sorted { $0.index < $1.index }) { w in
-    row(w, clock.epoch)
+  // WORKSPACES — labelled section header + count, then the list. This is the
+  // delimiter between the usage panel and the workspace list.
+  HStack(spacing: 8) {
+    Text("WORKSPACES").font(.system(size: 10, design: .monospaced)).bold().foregroundColor("#8A9199")
+    Spacer()
+    Text("\(workspaces.filter { !isUsageMeter($0) }.count)")
+      .font(.system(size: 10, design: .monospaced)).foregroundColor("#6E7787")
+  }
+  .padding(9)
+  Divider()
+
+  // Drag-and-drop reorder (persisted) — the supported way to make the list
+  // draggable; the drop sends workspace_id + target index to workspace.reorder.
+  Reorderable(workspaces.filter { !isUsageMeter($0) }.sorted { $0.index < $1.index }, move: "workspace.reorder") { w in
+    row(w)
   }
   Spacer()
 }

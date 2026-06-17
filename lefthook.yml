@@ -1,0 +1,32 @@
+# Git hooks for cmux-sentinel — managed by lefthook.
+# Install: `brew install lefthook && lefthook install`
+# Uninstall: `lefthook uninstall`
+#
+# Runs the SAME gates as CI (via the Makefile) so a commit that passes here
+# passes CI. Each command is globbed to the files it cares about, so a docs-only
+# commit doesn't run shellcheck and vice-versa. `secrets` runs on EVERY commit —
+# it's the guard against leaking a real UUID/token, the one mistake with no undo.
+
+pre-commit:
+  parallel: true
+  commands:
+    secrets:
+      run: make secrets
+    shellcheck:
+      glob: "*.sh"
+      run: make shellcheck
+    markdown:
+      glob: "*.md"
+      run: make markdown
+    # Parse-check the sidebar when it changes (only if cmux is installed).
+    sidebar:
+      glob: "sidebars/*.swift"
+      run: make sidebar
+
+# Heavier, full-tree gate before sharing — catches anything the per-file globs
+# above skipped (e.g. a markdown rule tripped by an unstaged-but-tracked file).
+pre-push:
+  parallel: true
+  commands:
+    check:
+      run: make ci

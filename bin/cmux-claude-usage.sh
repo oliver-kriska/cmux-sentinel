@@ -169,11 +169,19 @@ main() {
     # The custom sidebar's workspace data does NOT carry `progress` for idle
     # workspaces (only set on the active/agent workspace) — but the title always
     # propagates. So encode the bar + percent + reset directly in the title.
-    local fh_bar sd_bar fh_dot sd_dot
+    local fh_bar sd_bar fh_dot sd_dot rerr
     fh_bar=$(make_bar "$fh_pct" 10); fh_dot=$(sev_dot "$fh_pct")
     sd_bar=$(make_bar "$sd_pct" 10); sd_dot=$(sev_dot "$sd_pct")
-    cmux rename-workspace --workspace "$SENTINEL_5H" "${fh_dot}5h ${fh_bar} ${fh_pct}% ${fh_human}" &>/dev/null
-    cmux rename-workspace --workspace "$SENTINEL_7D" "${sd_dot}7d ${sd_bar} ${sd_pct}% ${sd_human}" &>/dev/null
+    # The renames are the actual user-visible write. The `ping` gate above passing
+    # does NOT guarantee a rename lands (socket auth could drop mid-run, or a
+    # sentinel id could be stale) — so check each one. A silent `&>/dev/null` here
+    # would let "updated:" print on a no-op; capture cmux's stderr and fail loudly.
+    # (`local rerr` is declared above, separately, so this assignment's exit code
+    # isn't masked by `local` always returning 0.)
+    rerr=$(cmux rename-workspace --workspace "$SENTINEL_5H" "${fh_dot}5h ${fh_bar} ${fh_pct}% ${fh_human}" 2>&1 >/dev/null) \
+      || die "rename rejected for 5h sentinel ($SENTINEL_5H): ${rerr:-no detail}"
+    rerr=$(cmux rename-workspace --workspace "$SENTINEL_7D" "${sd_dot}7d ${sd_bar} ${sd_pct}% ${sd_human}" 2>&1 >/dev/null) \
+      || die "rename rejected for 7d sentinel ($SENTINEL_7D): ${rerr:-no detail}"
     echo "updated: 5h=${fh_pct}% (${fh_human})  7d=${sd_pct}% (${sd_human})"
     return
   fi

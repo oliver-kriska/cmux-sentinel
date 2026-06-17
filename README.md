@@ -46,7 +46,7 @@ mechanisms feed it:
    sidebar matches sentinels by id and renders their titles in the top `USAGE` panel, hidden from
    the list.
 
-```
+```text
 launchd ──► bin/cmux-claude-usage.sh --update
               ├─ read OAuth token ← macOS Keychain ("Claude Code-credentials")
               ├─ GET api.anthropic.com/api/oauth/usage   (5h + 7d utilization + reset times)
@@ -99,7 +99,7 @@ PRs adding providers are very welcome.
 
 ### Claude provider — data source
 
-```
+```http
 GET https://api.anthropic.com/api/oauth/usage
 Authorization: Bearer <oauth_access_token>
 anthropic-beta: oauth-2025-04-20
@@ -136,7 +136,7 @@ The cmux sidebar runs a **subset** of SwiftUI. Hard-won facts (respect these in 
 
 ## Layout
 
-```
+```text
 bin/cmux-claude-usage.sh   Claude usage poller (--print | --raw | --update)
 sidebars/workspaces.swift  the sidebar (the opinionated design + USAGE panel)
 hooks/cmux-bridge.sh       optional Claude Code → cmux working-state bridge

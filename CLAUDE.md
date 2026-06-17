@@ -11,23 +11,24 @@ discover from the code alone, because the failure mode is a **silently blank sid
 runtime, and the interpreter swallows the error (no log). So an edit that "validates" can still
 break everything. Confirmed traps:
 
-- **No working String `.contains` / `.hasPrefix`.** They render blank when actually executed. The
-  existing `isCompacting` uses `.contains("Compact")` and only "works" because a workspace is
-  almost never mid-compact, so that line never runs. **Match by exact id with `==`** instead
-  (proven: row code uses `w.pr.status == "open"`).
+- **String ops `.hasPrefix` / `.contains` / `.hasSuffix` / `.split` DO work** on the current build
+  (proven by probe: `hasPrefix=Y contains=Y hasSuffix=Y`; the live sidebar detects the working/
+  compacting title markers via `.hasPrefix` and strips them with `.split`). An earlier note here
+  claimed they render blank — that was WRONG on this build. `==` works too; use whichever is clearest.
 - **Avoid `||`** (unproven). Use an `if`-chain returning early. `&&` is fine and short-circuits.
-- **For IDLE workspaces, only `title` reaches the sidebar data.** `progress` and `color` are
-  populated only for the ACTIVE/agent workspace — both show up in `cmux sidebar-state` but stay
-  `nil` in the sidebar's `workspaces[]` for idle ones. This is THE reason usage meters ride the
-  workspace **title** (set via `cmux rename-workspace`), not `set-progress`.
+- **`progress` / `description` / `color` never reach the sidebar data** — not even for the SELECTED,
+  canonically-working workspace (proven by in-sidebar probe: `progN=0 descN=0`). They show in
+  `cmux sidebar-state` but stay `nil` in the sidebar's `workspaces[]`. So the **title** is the only
+  writable channel: usage meters AND agent working/compacting state all ride it (set via
+  `cmux rename-workspace`), never `set-progress`.
 - **`cmux sidebar-state` DIVERGES from what the sidebar sees** (it reads the canonical store). Never
   use it to predict the sidebar — verify with an in-sidebar `Text(...)` probe.
 - **No native value bar for meters.** `ProgressView(value:)` needs a numeric `progress`, which idle
   sentinels don't have — so meters are Unicode block text bars (`▏▎▍▌▋▊▉█`). Utilization **color**
   can't come from data either; it's a colored emoji in the title (🟡/🔴).
 - **Greedy modifiers that wreck row height:** `Divider().background("#hex")`,
-  `.frame(maxHeight: .infinity)`, `.overlay { Rectangle().frame(height:1) }`. Use plain `Divider()`
-  + a single `.padding(n)`. `.contentShape(Rectangle())` is a no-op. Custom fonts aren't honored —
+  `.frame(maxHeight: .infinity)`, `.overlay { Rectangle().frame(height:1) }`. Use plain `Divider()` +
+  a single `.padding(n)`. `.contentShape(Rectangle())` is a no-op. Custom fonts aren't honored —
   use `.system(size:, design: .monospaced)`.
 
 **When the sidebar goes blank, DON'T guess.** Replace the whole file with a one-line
@@ -49,12 +50,21 @@ cmux sidebar validate workspaces && cmux sidebar reload   # validate only PARSES
 
 ## Architecture / where things live
 
-```
+```text
 sidebars/workspaces.swift  the sidebar. isClaudeMeter() = `==` id list per provider; isUsageMeter() = any.
 bin/cmux-claude-usage.sh    Claude usage poller. make_bar / sev_dot / mark_offline / bucket_field.
-hooks/cmux-bridge.sh        Claude Code → cmux working-state bridge (green "working" rows).
+hooks/cmux-bridge.sh        Claude Code → cmux agent-state bridge (⚡ working / ⏳ compacting rows).
 examples/                   usage-sentinels.env + launchd plist templates.
 ```
+
+- **Agent state rides STATIC title markers** the bridge keeps at the FRONT of the title — `⚡` =
+  working, `⏳` = compacting (precedence: compacting > working > needs-you > idle). The sidebar
+  detects them with `.hasPrefix` and strips them for display. STATIC is mandatory: an animated /
+  frame-by-frame marker in the title floods cmux's title coalescer and freezes the sidebar
+  (upstream cmux #6291). The bridge ref-counts live sessions per workspace as files under
+  `$TMPDIR/cmux-sentinel-work/<ws>/` and reaps dead PIDs (`kill -0`), so multiple agents and crashes
+  are handled; a `.marked` flag (30s TTL) keeps the per-tool-call hot path off the ~44ms title read.
+  Test the state machine offline with the stubbed-cmux harness (see `.claude/` working docs).
 
 - **Usage meters group by provider:** each provider gets its own labelled panel section
   (`CLAUDE USAGE`, `CODEX USAGE`, …) — same component reused. A meter is just an idle "sentinel"
@@ -62,9 +72,10 @@ examples/                   usage-sentinels.env + launchd plist templates.
   `isCodexMeter()` predicate + an `if isCodexMeter(w)` line to `isUsageMeter()` + a `CODEX USAGE`
   panel section, and copy the poller with a new data source. (Whether Codex exposes a usable usage
   endpoint is an open research question.)
-- **Auto-refresh** needs `"automation": { "socketControlMode": "automation" }` in `cmux.json` AND a
-  **full cmux restart** (`reload-config` does NOT apply socket security — read only at startup).
-  Otherwise external (launchd) socket commands are rejected.
+- **Auto-refresh** needs `"automation": { "socketControlMode": "automation" }` in `cmux.json`. On the
+  current build `reload-config` applies this **live** (proven: an external launchd kick landed its
+  renames with no restart) — the earlier "needs a full cmux restart" note was outdated. If external
+  (launchd) socket commands start getting rejected, the automation mode regressed → restart cmux.
 
 ## Conventions & security
 
@@ -72,6 +83,10 @@ examples/                   usage-sentinels.env + launchd plist templates.
   that way. No tokens, no real workspace UUIDs (use `REPLACE_WITH_*` placeholders), no usernames in
   committed files.
 - Dependency-light: bash + `jq` + `curl` + macOS `date`. Terse comments about *why*.
+- **Run `make check` before proposing a commit** — shellcheck + the secret/placeholder guard
+  (`scripts/check-secrets.sh`) + markdownlint + sidebar parse. `lefthook install` wires the same
+  gates into git hooks; CI runs `make ci`. The secret guard is the load-bearing one (blocks real
+  UUIDs / tokens / `/Users/<name>` paths and enforces the sidebar's `REPLACE_WITH_*` placeholders).
 - See `CONTRIBUTING.md` for the dev loop and PR norms. (Maintainers may keep gitignored working
   docs under `.claude/` — e.g. `.claude/NOTES.local.md` with the full debugging history and
   `.claude/HANDOFF.md` for resuming a session — never committed.)

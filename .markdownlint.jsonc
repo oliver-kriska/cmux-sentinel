@@ -1,0 +1,9 @@
+{
+  // cmux-sentinel docs lint. Terse house style wraps wider than 80 and the
+  // README needs a centered <img>, so those two rules are off; everything else
+  // (code-fence languages, blank lines around fences, heading hygiene) stays on.
+  "default": true,
+  "MD013": false, // line-length — docs wrap at ~90-99 by hand, intentionally
+  "MD033": false, // inline HTML — README centers the screenshot with <p>/<img>
+  "MD041": false  // first line need not be a top-level heading (frontmatter-ish)
+}
