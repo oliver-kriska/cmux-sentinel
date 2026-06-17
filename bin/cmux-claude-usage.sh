@@ -59,7 +59,7 @@ fetch_usage() {
 # ISO8601 -> epoch seconds (BSD/macOS date). Handles Z, +00:00, fractional secs.
 iso_to_epoch() {
   local iso="$1"
-  [ -n "$iso" ] && [ "$iso" != "null" ] || { echo ""; return; }
+  if [ -z "$iso" ] || [ "$iso" = "null" ]; then echo ""; return; fi
   iso=$(printf '%s' "$iso" | sed -E 's/\.[0-9]+//; s/Z$/+0000/; s/([+-][0-9]{2}):([0-9]{2})$/\1\2/')
   date -j -f "%Y-%m-%dT%H:%M:%S%z" "$iso" +%s 2>/dev/null || echo ""
 }
@@ -161,7 +161,7 @@ main() {
     [ -f "$SENTINELS_ENV" ] || die "no sentinel config at $SENTINELS_ENV (run setup first)"
     # shellcheck disable=SC1090
     source "$SENTINELS_ENV"
-    [ -n "${SENTINEL_5H:-}" ] && [ -n "${SENTINEL_7D:-}" ] || die "SENTINEL_5H/SENTINEL_7D not set in $SENTINELS_ENV"
+    if [ -z "${SENTINEL_5H:-}" ] || [ -z "${SENTINEL_7D:-}" ]; then die "SENTINEL_5H/SENTINEL_7D not set in $SENTINELS_ENV"; fi
     # Needs socketControlMode=automation, which the cmux socket server reads at
     # startup — a broken-pipe rejection here means cmux is still on cmuxOnly and
     # must be restarted to apply the mode.
