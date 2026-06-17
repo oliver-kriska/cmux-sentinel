@@ -4,7 +4,7 @@ An opinionated [cmux](https://cmux.com) **custom sidebar** — a clean, monospac
 workspaces list with live agent states and pluggable **AI usage meters**.
 
 <p align="center">
-  <img src="assets/sidebar.png" alt="cmux-sentinel sidebar — USAGE panel above the workspace list" width="320">
+  <img src="assets/sidebar.png" alt="cmux-sentinel sidebar — CLAUDE USAGE meters above the workspace list, a working agent shown in green" width="320">
 </p>
 
 The top **USAGE** panel shows live Claude limits (5h session + 7d weekly) with smooth sub-cell
@@ -61,6 +61,16 @@ launchd ──► bin/cmux-claude-usage.sh --update
 
 ## Install
 
+One-liner — clones to `~/.cache/cmux-sentinel` and runs the installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/install.sh | bash
+# also install the working-state hooks:
+curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/install.sh | WITH_BRIDGE=1 bash
+```
+
+Or clone it yourself:
+
 ```bash
 git clone https://github.com/oliver-kriska/cmux-sentinel.git
 cd cmux-sentinel
@@ -84,7 +94,7 @@ remaining manual steps. In short:
 6. **Verify the pipeline:** `make doctor` (or `~/bin/cmux-sentinel-doctor.sh`) — a read-only check
    that the bridge, hooks, launchd job, automation mode, and sentinels are all wired.
 
-**Prereqs:** macOS, cmux (custom sidebars / beta), Claude Code logged in, `jq`, `curl`.
+**Prereqs:** macOS, cmux (custom sidebars / beta), Claude Code logged in, `jq`, `curl`, `git`.
 
 ---
 

@@ -5,7 +5,23 @@
 # follow the printed "NEXT STEPS" to finish wiring it up.
 set -euo pipefail
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_URL="https://github.com/oliver-kriska/cmux-sentinel.git"
+
+# Resolve our own directory. When piped (curl … | bash) there is no file beside
+# us — BASH_SOURCE is empty and the repo files aren't local — so clone to a cache
+# dir and re-exec from there. This is what makes the one-line curl installer work.
+src="${BASH_SOURCE[0]:-}"
+here=""
+[ -n "$src" ] && here="$(cd "$(dirname "$src")" && pwd)"
+if [ -z "$here" ] || [ ! -f "$here/bin/cmux-claude-usage.sh" ]; then
+  command -v git >/dev/null 2>&1 || { echo "git is required for the curl installer" >&2; exit 1; }
+  cache="${XDG_CACHE_HOME:-$HOME/.cache}/cmux-sentinel"
+  echo "Fetching cmux-sentinel → $cache"
+  if [ -d "$cache/.git" ]; then git -C "$cache" pull --ff-only --quiet || true
+  else rm -rf "${cache:?}"; git clone --depth 1 "$REPO_URL" "$cache"; fi
+  exec bash "$cache/install.sh"   # WITH_BRIDGE and other env vars survive exec
+fi
+
 cfg="$HOME/.config/cmux"
 bak() { [ -e "$1" ] && cp "$1" "$1.bak.$(date +%s)" && echo "  backed up $1"; return 0; }
 
