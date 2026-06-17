@@ -36,15 +36,28 @@ func isCompacting(_ w) -> Bool {
   return hasProgressLabel(w) && w.progress.label.contains("Compact")
 }
 
-// Usage meters: idle "sentinel" workspaces whose titles are driven by a
-// background poller (e.g. cmux-claude-usage.sh for Claude 5h/7d; add Codex or
-// any other provider the same way). Detected by exact id (the interpreter has
-// no working String .contains; == is fine). List EVERY meter sentinel id here,
-// one per provider window, and keep them in sync with the poller env files.
-func isUsageMeter(_ w) -> Bool {
+// Usage meters: idle "sentinel" workspaces whose titles are driven by background
+// pollers. ONE predicate per provider (matched by exact id — the interpreter has
+// no working String .contains, and == is fine) so each provider renders its own
+// labelled section in the panel. Keep ids in sync with the poller env files.
+func isClaudeMeter(_ w) -> Bool {
   if w.id == "REPLACE_WITH_5H_SENTINEL_UUID" { return true }  // Claude — 5h session
   if w.id == "REPLACE_WITH_7D_SENTINEL_UUID" { return true }  // Claude — 7d weekly
-  // if w.id == "REPLACE_WITH_CODEX_SENTINEL_UUID" { return true }  // e.g. Codex
+  return false
+}
+
+// Add a provider: copy isClaudeMeter with the new sentinel id(s), add an
+// `if isCodexMeter(w) { return true }` line to isUsageMeter below, and a matching
+// section in the panel (search "CLAUDE USAGE").
+// func isCodexMeter(_ w) -> Bool {
+//   if w.id == "REPLACE_WITH_CODEX_SENTINEL_UUID" { return true }
+//   return false
+// }
+
+// Any meter, any provider — used only to hide sentinels from the workspace list.
+func isUsageMeter(_ w) -> Bool {
+  if isClaudeMeter(w) { return true }
+  // if isCodexMeter(w) { return true }
   return false
 }
 
@@ -187,10 +200,11 @@ VStack(alignment: .leading, spacing: 0) {
   .padding(9)
   Divider()
 
-  if workspaces.filter { isUsageMeter($0) }.count > 0 {
+  // USAGE — one labelled section per provider (same component, different meters).
+  if workspaces.filter { isClaudeMeter($0) }.count > 0 {
     VStack(alignment: .leading, spacing: 6) {
-      Text("USAGE").font(.system(size: 10, design: .monospaced)).bold().foregroundColor("#8A9199")
-      ForEach(workspaces.filter { isUsageMeter($0) }.sorted { $0.index < $1.index }) { w in
+      Text("CLAUDE USAGE").font(.system(size: 10, design: .monospaced)).bold().foregroundColor("#8A9199")
+      ForEach(workspaces.filter { isClaudeMeter($0) }.sorted { $0.index < $1.index }) { w in
         Text(w.title)
           .font(.system(size: 12, design: .monospaced))
           .foregroundColor("#CCCAC2")
@@ -199,6 +213,18 @@ VStack(alignment: .leading, spacing: 0) {
     .padding(9)
     Divider()
   }
+
+  // Next provider — copy the block above, swap predicate + header:
+  // if workspaces.filter { isCodexMeter($0) }.count > 0 {
+  //   VStack(alignment: .leading, spacing: 6) {
+  //     Text("CODEX USAGE").font(.system(size: 10, design: .monospaced)).bold().foregroundColor("#8A9199")
+  //     ForEach(workspaces.filter { isCodexMeter($0) }.sorted { $0.index < $1.index }) { w in
+  //       Text(w.title).font(.system(size: 12, design: .monospaced)).foregroundColor("#CCCAC2")
+  //     }
+  //   }
+  //   .padding(9)
+  //   Divider()
+  // }
 
   ForEach(workspaces.filter { !isUsageMeter($0) }.sorted { $0.index < $1.index }) { w in
     row(w, clock.epoch)

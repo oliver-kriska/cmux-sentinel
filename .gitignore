@@ -5,6 +5,7 @@
 # never commit a real, filled-in sentinel env or token
 usage-sentinels.env
 
-# private working notes — knowledge lives in the project, but stays out of the public repo
+# private working / handoff docs — live in .claude/, knowledge stays in the
+# project but never gets committed to the public repo
+/.claude/
 *.local.md
-.notes/

@@ -50,15 +50,17 @@ cmux sidebar validate workspaces && cmux sidebar reload   # validate only PARSES
 ## Architecture / where things live
 
 ```
-sidebars/workspaces.swift  the sidebar. isUsageMeter() = the `==` id list for meter sentinels.
+sidebars/workspaces.swift  the sidebar. isClaudeMeter() = `==` id list per provider; isUsageMeter() = any.
 bin/cmux-claude-usage.sh    Claude usage poller. make_bar / sev_dot / mark_offline / bucket_field.
 hooks/cmux-bridge.sh        Claude Code → cmux working-state bridge (green "working" rows).
 examples/                   usage-sentinels.env + launchd plist templates.
 ```
 
-- **Usage meters are provider-agnostic:** a meter is just an idle "sentinel" workspace whose title
-  a poller keeps updated. To add a provider (e.g. Codex): create a sentinel, add its id to
-  `isUsageMeter()`, copy the poller with a new data source. (Whether Codex exposes a usable usage
+- **Usage meters group by provider:** each provider gets its own labelled panel section
+  (`CLAUDE USAGE`, `CODEX USAGE`, …) — same component reused. A meter is just an idle "sentinel"
+  workspace whose title a poller keeps updated. To add a provider: create a sentinel, add an
+  `isCodexMeter()` predicate + an `if isCodexMeter(w)` line to `isUsageMeter()` + a `CODEX USAGE`
+  panel section, and copy the poller with a new data source. (Whether Codex exposes a usable usage
   endpoint is an open research question.)
 - **Auto-refresh** needs `"automation": { "socketControlMode": "automation" }` in `cmux.json` AND a
   **full cmux restart** (`reload-config` does NOT apply socket security — read only at startup).
@@ -70,5 +72,6 @@ examples/                   usage-sentinels.env + launchd plist templates.
   that way. No tokens, no real workspace UUIDs (use `REPLACE_WITH_*` placeholders), no usernames in
   committed files.
 - Dependency-light: bash + `jq` + `curl` + macOS `date`. Terse comments about *why*.
-- See `CONTRIBUTING.md` for the dev loop and PR norms. (Maintainers may keep a gitignored
-  `NOTES.local.md` with the full debugging history and decisions.)
+- See `CONTRIBUTING.md` for the dev loop and PR norms. (Maintainers may keep gitignored working
+  docs under `.claude/` — e.g. `.claude/NOTES.local.md` with the full debugging history and
+  `.claude/HANDOFF.md` for resuming a session — never committed.)

@@ -84,11 +84,13 @@ remaining manual steps. In short:
 
 ## Usage meters (providers)
 
-The meter panel is provider-agnostic: each metric is just a sentinel workspace whose **title** a
-poller keeps updated, and the sidebar renders every title where `isUsageMeter(w)` is true. To
-**add a provider** (e.g. Codex):
+Each provider gets its **own labelled section** in the panel — `CLAUDE USAGE` now, `CODEX USAGE`
+later — the same component reused. A meter is just an idle "sentinel" workspace whose **title** a
+poller keeps updated. To **add a provider** (e.g. Codex):
 
-1. Create a sentinel workspace, add its UUID to `isUsageMeter()` in `sidebars/workspaces.swift`.
+1. Create a sentinel workspace and grab its UUID. In `sidebars/workspaces.swift`: add an
+   `isCodexMeter(w)` predicate (copy `isClaudeMeter`), add `if isCodexMeter(w) { return true }` to
+   `isUsageMeter`, and uncomment/duplicate the `CODEX USAGE` section in the panel.
 2. Write a small poller (copy `bin/cmux-claude-usage.sh`) that fetches the provider's usage and
    does `cmux rename-workspace --workspace <uuid> "<label> <bar> <pct>% <reset>"`.
 3. Schedule it (launchd) like the Claude one.
