@@ -8,8 +8,8 @@ workspaces list with live agent states and pluggable **AI usage meters**.
 </p>
 
 The top **USAGE** panel shows live Claude limits (5h session + 7d weekly) with smooth sub-cell
-bars — a 🟡/🔴 dot appears only when a limit gets close — and workspace rows light up green
-(working) / orange (needs you) for live agent state.
+bars — a 🟡/🔴 dot appears only when a limit gets close — and workspace rows light up by agent
+state: **purple** (compacting) / **green** (working) / **orange** (needs you) / dim (idle).
 
 It's a vibe-coded [custom sidebar](https://cmux.com/docs/custom-sidebars) (beta) plus small
 background pollers. Batteries included, easy to fork and tweak.
@@ -17,9 +17,10 @@ background pollers. Batteries included, easy to fork and tweak.
 ## Features
 
 - **Flat workspace list** in your manual order, SF Mono, Ayu-Mirage palette.
-- **Live agent row states** (via a Claude Code hooks bridge): `working` (green), `needs you`
-  (orange, unread), `idle` (dim) — with a bolt/bell glyph and contextual subtitle (PR, branch,
-  dirty, "needs you · 2m").
+- **Live agent row states** (via a Claude Code hooks bridge): `compacting` (purple), `working`
+  (green), `needs you` (orange, unread), `idle` (dim) — shown by row colour with a two-line
+  subtitle that keeps agent activity separate from repo state (branch · dirty · PR). The header
+  shows live per-state counts.
 - **Inline actions**: click to select, `×` to close, unread badges.
 - **Usage meters** — a top panel of live progress bars fed by background pollers. Ships with a
   **Claude Code** provider (rolling 5-hour session + 7-day weekly), with a smooth sub-cell
@@ -38,13 +39,16 @@ cmux custom sidebars are runtime-interpreted SwiftUI-style files. The sidebar ca
 fixed set of per-workspace fields — it **cannot** fetch URLs or read arbitrary data. Two
 mechanisms feed it:
 
-1. **Agent row states** — Claude Code hooks → `hooks/cmux-bridge.sh` → `cmux set-progress` /
-   `clear-progress` on the *active* workspace. The sidebar reads that as the working signal.
+1. **Agent row states** — Claude Code hooks → `hooks/cmux-bridge.sh` → a STATIC marker on the
+   *active* workspace's **title** (`⚡` working, `⏳` compacting), reference-counted so multiple
+   agents in one workspace don't stomp it and dead sessions can't strand it. The sidebar detects
+   the marker, colours the row, and strips the glyph for display. (Why the title and not
+   `set-progress`: progress doesn't reach custom-sidebar data on this build — see gotchas — and
+   the marker must be *static*, since an animated one freezes cmux's sidebar.)
 2. **Usage meters** — a poller (run by launchd every few minutes) computes each metric and writes
-   it into a dedicated idle **"sentinel" workspace** by **renaming its title** (the title is the
-   one channel that propagates to idle workspaces — `set-progress` does not; see gotchas). The
-   sidebar matches sentinels by id and renders their titles in the top `USAGE` panel, hidden from
-   the list.
+   it into a dedicated idle **"sentinel" workspace** by **renaming its title** (the same title
+   channel). The sidebar matches sentinels by id and renders their titles in the top `USAGE`
+   panel, hidden from the list.
 
 ```text
 launchd ──► bin/cmux-claude-usage.sh --update
@@ -73,10 +77,12 @@ remaining manual steps. In short:
 3. **Load the sidebar:** `cmux sidebar validate workspaces && cmux sidebar reload`, then
    right-click the sidebar button and pick *workspaces*.
 4. **Enable external socket access** for auto-refresh — add
-   `"automation": { "socketControlMode": "automation" }` to `~/.config/cmux/cmux.json`, then
-   **fully restart cmux** (`reload-config` does not apply it).
+   `"automation": { "socketControlMode": "automation" }` to `~/.config/cmux/cmux.json`, then run
+   `cmux reload-config` (applies live on current builds; if renames still get rejected, restart cmux).
 5. **Start auto-refresh:**
    `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cmux-claude-usage.plist`.
+6. **Verify the pipeline:** `make doctor` (or `~/bin/cmux-sentinel-doctor.sh`) — a read-only check
+   that the bridge, hooks, launchd job, automation mode, and sentinels are all wired.
 
 **Prereqs:** macOS, cmux (custom sidebars / beta), Claude Code logged in, `jq`, `curl`.
 
@@ -117,13 +123,14 @@ Keychain each run; never stored or printed.
 
 The cmux sidebar runs a **subset** of SwiftUI. Hard-won facts (respect these in PRs):
 
-- **`set-progress` / workspace `color` do NOT propagate to the sidebar for IDLE workspaces** — only
-  for the active/agent workspace. For idle sentinels, **`title` is the only reliable channel**, so
-  bar + % + reset + severity dot all ride the title string. (`cmux sidebar-state` shows the
-  canonical store and diverges from what the sidebar actually sees — don't trust it to predict the
-  sidebar.)
-- **String `.contains` / `.hasPrefix` are broken** when executed (silent blank render). Match by
-  `==` instead. Avoid `||`; use an `if`-chain returning early.
+- **`set-progress` / `description` / `color` do NOT reach custom-sidebar data at all** — not even
+  for the selected, working workspace (proven by probe). **`title` is the only writable channel**, so
+  usage bars AND the agent working/compacting markers all ride the title string. (`cmux sidebar-state`
+  shows the canonical store and diverges from what the sidebar actually sees — don't trust it to
+  predict the sidebar.)
+- **String `.hasPrefix` / `.contains` / `.split` DO work** here — the marker detection relies on
+  them. (An older note claimed they blank-render; that was disproven on the current build.) `==`
+  works too. Avoid `||`; use an `if`-chain returning early.
 - **No value-accurate native bar** (`ProgressView`/`Capsule`) for meters — a drawn bar needs the %
   as a number, but you only have it as a string in the title and the interpreter can't reliably
   parse it back. Hence Unicode block text bars. Likewise utilization **color** can only come from a
@@ -137,11 +144,13 @@ The cmux sidebar runs a **subset** of SwiftUI. Hard-won facts (respect these in 
 ## Layout
 
 ```text
-bin/cmux-claude-usage.sh   Claude usage poller (--print | --raw | --update)
-sidebars/workspaces.swift  the sidebar (the opinionated design + USAGE panel)
-hooks/cmux-bridge.sh       optional Claude Code → cmux working-state bridge
-examples/                  usage-sentinels.env + launchd plist templates
-install.sh                 file placement + next-steps
+bin/cmux-claude-usage.sh     Claude usage poller (--print | --raw | --update)
+bin/cmux-sentinel-doctor.sh  read-only health-check of the whole pipeline
+sidebars/workspaces.swift    the sidebar (the opinionated design + USAGE panel)
+hooks/cmux-bridge.sh         Claude Code → cmux agent-state bridge (⚡ working / ⏳ compacting)
+tests/bridge-state.sh        offline bridge state-machine test (stubs cmux; `make test`)
+examples/                    usage-sentinels.env + launchd plist templates
+install.sh                   file placement + next-steps
 ```
 
 ## Security

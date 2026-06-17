@@ -47,12 +47,14 @@ _alive() { kill -0 "$1" 2>/dev/null; }
 # how long a desync survives if the title is changed OUT from under the bridge
 # (manual rename, cmux restart re-persisting an old title): the hot path stays
 # cheap (skips the ~44ms title read) for TTL seconds, then re-verifies and
-# self-heals. stat -f is BSD/macOS (this whole project is macOS-only — see poller).
+# self-heals. stat: GNU (-c) first, then BSD/macOS (-f) — runtime is macOS but the
+# offline harness runs on Linux CI, and the numeric guard rejects either's garbage.
 _MARK_TTL=30
 _marked_fresh() {
   local m="$1/.marked" mt now
   [ -f "$m" ] || return 1
-  mt=$(stat -f %m "$m" 2>/dev/null) || return 1
+  mt=$(stat -c %Y "$m" 2>/dev/null || stat -f %m "$m" 2>/dev/null) || return 1
+  case "$mt" in '' | *[!0-9]*) return 1 ;; esac
   now=$(date +%s)
   [ $((now - mt)) -lt "$_MARK_TTL" ]
 }
@@ -156,11 +158,31 @@ _reconcile_all() {
   for d in "$WORKROOT"/*/; do [ -d "$d" ] || continue; _reconcile_ws "$(basename "$d")"; done
 }
 
+# Restart self-heal: $WORKROOT lives in $TMPDIR, which a reboot can wipe while a
+# workspace TITLE still carries a persisted ⚡/⏳. _reconcile_all only visits
+# existing WORKROOT dirs, so it can't see those orphans. Scan every title and
+# strip a marker whose workspace has NO live session. One list-workspaces; only
+# the (rare) marked rows do any work, so this stays cheap on SessionStart.
+_sweep_orphan_marks() {
+  local line id t
+  cmux list-workspaces --id-format uuids 2>/dev/null | while IFS= read -r line; do
+    case "$line" in *"$WORKMARK"* | *"$COMPMARK"*) : ;; *) continue ;; esac
+    id=$(printf '%s' "$line" | grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' | head -1)
+    [ -n "$id" ] || continue
+    t=$(printf '%s' "$line" | sed -E "s/^.*${id}[[:space:]]+//; s/[[:space:]]*\[selected\]\$//")
+    case "$t" in "$WORKMARK"* | "$COMPMARK"*) : ;; *) continue ;; esac
+    [ -n "$(_desired_mark "$WORKROOT/$id")" ] && continue # has a live session → keep
+    cmux rename-workspace --workspace "$id" "$(_strip_marks "$t")" &>/dev/null
+    rm -rf "${WORKROOT:?}/$id" 2>/dev/null
+  done
+}
+
 case "$event" in
   SessionStart)
     src=$(echo "$input" | jq -r '.source // "startup"')
     cmux log --level info --source cc -- "Session $src" &>/dev/null
-    _reconcile_all
+    _reconcile_all       # re-derive markers for workspaces we still track
+    _sweep_orphan_marks  # strip markers stranded by a $TMPDIR wipe (reboot)
     ;;
 
   UserPromptSubmit) _set_working ;;

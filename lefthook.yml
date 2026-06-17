@@ -18,6 +18,10 @@ pre-commit:
     markdown:
       glob: "*.md"
       run: make markdown
+    # Run the offline bridge state-machine test when the bridge or test changes.
+    test:
+      glob: "{hooks/cmux-bridge.sh,tests/bridge-state.sh}"
+      run: make test
     # Parse-check the sidebar when it changes (only if cmux is installed).
     sidebar:
       glob: "sidebars/*.swift"

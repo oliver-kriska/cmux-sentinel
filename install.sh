@@ -13,10 +13,12 @@ echo "Installing opinionated cmux sidebar from $here"
 
 mkdir -p "$HOME/bin" "$cfg/sidebars" "$HOME/.claude/hooks" "$HOME/Library/LaunchAgents"
 
-# 1. poller
+# 1. poller + doctor
 bak "$HOME/bin/cmux-claude-usage.sh"
 install -m 0755 "$here/bin/cmux-claude-usage.sh" "$HOME/bin/cmux-claude-usage.sh"
 echo "  -> ~/bin/cmux-claude-usage.sh"
+install -m 0755 "$here/bin/cmux-sentinel-doctor.sh" "$HOME/bin/cmux-sentinel-doctor.sh"
+echo "  -> ~/bin/cmux-sentinel-doctor.sh  (run anytime to health-check the setup)"
 
 # 2. sidebar
 bak "$cfg/sidebars/workspaces.swift"
@@ -64,10 +66,14 @@ cat <<'NEXT'
 
 4. Enable external socket access for the 5-min auto-refresh — add to ~/.config/cmux/cmux.json:
      "automation": { "socketControlMode": "automation" }
-   then FULLY RESTART cmux (reload-config does NOT apply it).
+   then run `cmux reload-config` (applies live on current builds). If external socket
+   commands still get rejected later, the mode regressed — fully restart cmux.
 
 5. Start the auto-refresh:
      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cmux-claude-usage.plist
+
+6. Verify the whole pipeline:
+     ~/bin/cmux-sentinel-doctor.sh        # or, from the repo:  make doctor
 
 (Optional working-state rows: re-run with  WITH_BRIDGE=1 ./install.sh  and wire the hooks per README.)
 NEXT

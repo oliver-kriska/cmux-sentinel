@@ -1,7 +1,8 @@
-# CI for cmux-sentinel — static checks only (no cmux on the runner, so no
-# render/parse test). Mirrors `make ci`: shellcheck + secrets guard + markdown.
-# Actions are SHA-pinned (supply-chain hygiene); shellcheck and node ship on the
-# ubuntu runner, so the only third-party action is checkout.
+# CI for cmux-sentinel — no cmux on the runner, so no live render check, but the
+# bridge state-machine test stubs cmux and DOES run here. Mirrors `make ci`:
+# shellcheck + secrets guard + markdown + bridge test. Actions are SHA-pinned
+# (supply-chain hygiene); shellcheck, node, and jq ship on the ubuntu runner, so
+# the only third-party action is checkout.
 
 name: ci
 
@@ -25,5 +26,5 @@ jobs:
       - name: Install markdownlint-cli
         run: npm install -g markdownlint-cli@0.47.0
 
-      - name: shellcheck + secrets + markdown
+      - name: shellcheck + secrets + markdown + bridge test
         run: make ci
