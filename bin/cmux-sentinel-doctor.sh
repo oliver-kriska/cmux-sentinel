@@ -4,7 +4,7 @@
 # all SILENT (blank sidebar, stale marker, hooks that never fire), so this turns
 # "why isn't it updating?" into one diagnostic. Run: `make doctor` or directly.
 #
-# No secrets here: sentinel UUIDs are read at runtime from the user's env file.
+# No secrets here: sentinels are resolved by their title label at runtime.
 set -u
 
 CFG="$HOME/.config/cmux"
@@ -28,9 +28,8 @@ if [ -f "$CFG/sidebars/workspaces.swift" ]; then
   ok "sidebar deployed at ~/.config/cmux/sidebars/workspaces.swift"
   if have cmux && cmux sidebar validate workspaces &>/dev/null; then ok "sidebar parses (validate)"
   else warn "sidebar did not validate — run: cmux sidebar validate workspaces"; fi
-  if grep 'REPLACE_WITH_.*_UUID' "$CFG/sidebars/workspaces.swift" | grep -vq '^[[:space:]]*//'; then
-    warn "deployed sidebar has an un-substituted REPLACE_WITH_* placeholder on an active line"
-  fi
+  if grep -Eq 'w\.title\.hasPrefix\("(5h|7d) "\)' "$CFG/sidebars/workspaces.swift"; then :
+  else warn "deployed sidebar is missing its isClaudeMeter title anchors — usage panel won't render"; fi
 else bad "sidebar not deployed (run ./install.sh)"; fi
 
 echo "• working-state bridge"
@@ -65,20 +64,23 @@ if [ -f "$CFG/cmux.json" ]; then
   else warn "cmux.json has no socketControlMode: automation — auto-refresh renames may be rejected"; fi
 else warn "no ~/.config/cmux/cmux.json — can't confirm automation mode"; fi
 
+# Sentinels are now resolved by TITLE LABEL, not a stored id (cmux 0.64.15
+# dropped stable workspace UUIDs — see the poller's resolve_ref). So the check is
+# "does a workspace whose title starts with the label exist", which is exactly
+# what the poller and sidebar both key on. Labels are overridable via the env.
 echo "• usage sentinels"
 envf="$CFG/usage-sentinels.env"
-if [ -f "$envf" ]; then
-  for key in SENTINEL_5H SENTINEL_7D; do
-    val="$(grep -E "^${key}=" "$envf" | head -1 | cut -d= -f2- | tr -d '[:space:]')"
-    if [ -z "$val" ]; then bad "$key not set in usage-sentinels.env"
-    elif printf '%s' "$val" | grep -q 'REPLACE_WITH'; then bad "$key is still the placeholder — put your real UUID"
-    elif have cmux && cmux list-workspaces --id-format uuids 2>/dev/null | grep -qF "$val"; then
-      ok "$key resolves to a live workspace"
-      grep -qF "$val" "$CFG/sidebars/workspaces.swift" 2>/dev/null \
-        || warn "$key not referenced in the deployed sidebar's isUsageMeter() — meter row won't show"
-    else warn "$key set but no matching workspace found (create the sentinel?)"; fi
+# shellcheck disable=SC1090
+[ -f "$envf" ] && . "$envf"
+lbl5="${SENTINEL_5H_LABEL:-5h}"; lbl7="${SENTINEL_7D_LABEL:-7d}"
+if have cmux && have jq; then
+  for lbl in "$lbl5" "$lbl7"; do
+    ref="$(cmux workspace list --json 2>/dev/null \
+      | jq -r --arg l "$lbl" '.workspaces[] | select(.title|startswith($l+" ")) | .ref' 2>/dev/null | head -1)"
+    if [ -n "$ref" ]; then ok "'$lbl' sentinel present ($ref)"
+    else warn "no '$lbl' sentinel workspace (title starting \"$lbl \") — create it (see install.sh)"; fi
   done
-else warn "no usage-sentinels.env — usage meters are off (run ./install.sh)"; fi
+else warn "cmux or jq unavailable — can't check sentinels"; fi
 
 echo
 if [ "$fails" -gt 0 ]; then printf '\033[31m%d problem(s), %d warning(s).\033[0m\n' "$fails" "$warns"; exit 1

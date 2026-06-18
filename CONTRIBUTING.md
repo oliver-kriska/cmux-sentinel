@@ -53,11 +53,13 @@ brew install lefthook && lefthook install
 
 `scripts/check-secrets.sh` is the load-bearing one: it fails the commit if a real workspace UUID, a
 `/Users/<name>` path, or a token-shaped string lands in a tracked file, and asserts the sidebar keeps
-its `REPLACE_WITH_*` placeholders. CI (`.github/workflows/ci.yml`) runs `make ci` on every push/PR.
+its title-label meter anchors (`w.title.hasPrefix("5h "/"7d ")`). CI (`.github/workflows/ci.yml`)
+runs `make ci` on every push/PR.
 
 ## Ground rules
 
 - **Never commit secrets.** The OAuth token is read from the Keychain at runtime; keep it that
-  way. No tokens, no real workspace UUIDs (use placeholders), no usernames in committed files.
+  way. No tokens, no real workspace UUIDs, no usernames in committed files. (The sidebar matches
+  sentinels by title label, so it carries no ids to leak.)
 - Keep it dependency-light (bash + `jq` + `curl`, macOS `date`).
 - Match the existing style; keep comments terse and about *why*.

@@ -15,15 +15,23 @@
 # workspaces (only the active/agent workspace) — the TITLE, however, always
 # propagates. So we encode a unicode-block bar directly in the title via
 # `rename-workspace`: "5h ████░░░░░░ 39% 4h35m". The sidebar matches the two
-# sentinels by exact id (its interpreter has no working String .contains) and
-# renders their titles in a top USAGE panel, hidden from the normal list.
+# sentinels by their TITLE LABEL ("5h "/"7d ", via .hasPrefix) and renders their
+# titles in a top USAGE panel, hidden from the normal list.
+#
+# Identity: cmux 0.64.15 removed stable workspace UUIDs from the model and from
+# `workspace list --json` (id is null) — the only handle is a positional `ref`
+# (workspace:N) that ROTATES across app restarts and reorders. So we can't store
+# a sentinel id (the old SENTINEL_5H/7D UUID scheme broke on every restart); we
+# re-resolve each sentinel's ref every run from its title label, the one stable
+# anchor the sidebar also keys on. See resolve_ref().
 #
 # Modes:
 #   --print     fetch + print parsed values (verification; no cmux writes)
 #   --raw       fetch + print raw JSON (token NOT included)
 #   --update    fetch + rename both sentinel workspaces with bars (for launchd)
 #
-# Sentinel ids: ~/.config/cmux/usage-sentinels.env  (SENTINEL_5H=, SENTINEL_7D=)
+# Labels (overridable): ~/.config/cmux/usage-sentinels.env
+#   (SENTINEL_5H_LABEL=5h, SENTINEL_7D_LABEL=7d)
 
 set -uo pipefail
 
@@ -32,7 +40,26 @@ OAUTH_BETA="oauth-2025-04-20"
 KEYCHAIN_SERVICE="Claude Code-credentials"
 SENTINELS_ENV="$HOME/.config/cmux/usage-sentinels.env"
 
+# Title-label anchors for the two Claude sentinels (the poller writes each title
+# starting with its label, and the sidebar matches the same prefix). Overridable
+# via the env file; sane defaults so the poller works zero-config.
+# shellcheck disable=SC1090
+[ -f "$SENTINELS_ENV" ] && source "$SENTINELS_ENV"
+LABEL_5H="${SENTINEL_5H_LABEL:-5h}"
+LABEL_7D="${SENTINEL_7D_LABEL:-7d}"
+
 die() { echo "ERR: $*" >&2; exit 1; }
+
+# Resolve a sentinel's CURRENT ref by its title label. cmux dropped stable
+# workspace UUIDs (0.64.15), so refs (workspace:N) are the only handle — and they
+# rotate across restarts/reorders. Re-resolving by title every run is what makes
+# the poller survive a cmux restart (same reason the bridge reads a LIVE
+# $CMUX_WORKSPACE_ID instead of storing one). Prints the ref, or empty if none.
+resolve_ref() { # $1 = label (e.g. "5h")
+  cmux workspace list --json 2>/dev/null \
+    | jq -r --arg lbl "$1" '.workspaces[] | select(.title | startswith($lbl + " ")) | .ref' 2>/dev/null \
+    | head -1
+}
 
 read_token() {
   local raw=""
@@ -98,28 +125,29 @@ make_bar() {
 }
 
 # Severity dot for the title — ONLY amber/red, nothing below 70% (Linear-clean:
-# no indicator when you're fine, a dot only when a limit is getting close).
+# no indicator when you're fine, a dot only when a limit is getting close). It
+# TRAILS the bar (leading space) so the title always starts with the label, which
+# is what resolve_ref() and the sidebar both anchor on.
 sev_dot() {
   local p="${1:-0}"
   if [ "$p" -ge 90 ]; then
-    printf '🔴 '
+    printf ' 🔴'
   elif [ "$p" -ge 70 ]; then
-    printf '🟡 '
+    printf ' 🟡'
   fi
 }
 
 # Best-effort: stamp both sentinels with an offline/stale marker so a frozen bar
 # is obvious instead of silently showing the last good numbers. Needs the socket
-# (same constraint as --update); silently no-ops if it can't reach cmux.
+# (same constraint as --update); silently no-ops if it can't reach cmux or if a
+# sentinel can't be resolved. The "⚠ offline" title still starts with the label,
+# so the sidebar keeps recognising it as a meter and resolve_ref still finds it.
 mark_offline() {
-  local reason="${1:-offline}"
-  [ -f "$SENTINELS_ENV" ] || return 0
-  # shellcheck disable=SC1090
-  source "$SENTINELS_ENV"
-  [ -n "${SENTINEL_5H:-}" ] && [ -n "${SENTINEL_7D:-}" ] || return 0
+  local reason="${1:-offline}" r5 r7
   cmux ping &>/dev/null || return 0
-  cmux rename-workspace --workspace "$SENTINEL_5H" "5h  ⚠ ${reason}" &>/dev/null
-  cmux rename-workspace --workspace "$SENTINEL_7D" "7d  ⚠ ${reason}" &>/dev/null
+  r5=$(resolve_ref "$LABEL_5H"); r7=$(resolve_ref "$LABEL_7D")
+  [ -n "$r5" ] && cmux rename-workspace --workspace "$r5" "$LABEL_5H  ⚠ ${reason}" &>/dev/null
+  [ -n "$r7" ] && cmux rename-workspace --workspace "$r7" "$LABEL_7D  ⚠ ${reason}" &>/dev/null
 }
 
 # pull a bucket field, snake_case w/ camelCase fallback
@@ -158,31 +186,34 @@ main() {
   fi
 
   if [ "$mode" = "--update" ]; then
-    [ -f "$SENTINELS_ENV" ] || die "no sentinel config at $SENTINELS_ENV (run setup first)"
-    # shellcheck disable=SC1090
-    source "$SENTINELS_ENV"
-    if [ -z "${SENTINEL_5H:-}" ] || [ -z "${SENTINEL_7D:-}" ]; then die "SENTINEL_5H/SENTINEL_7D not set in $SENTINELS_ENV"; fi
     # Needs socketControlMode=automation, which the cmux socket server reads at
     # startup — a broken-pipe rejection here means cmux is still on cmuxOnly and
     # must be restarted to apply the mode.
     cmux ping &>/dev/null || die "cmux socket rejected (restart cmux to apply socketControlMode=automation)"
+    # Resolve each sentinel's ref FRESH by title label (ids rotate across cmux
+    # restarts — see resolve_ref). Empty means the sentinel workspace is gone.
+    local ref5 ref7
+    ref5=$(resolve_ref "$LABEL_5H"); ref7=$(resolve_ref "$LABEL_7D")
+    [ -n "$ref5" ] || die "no '$LABEL_5H' sentinel workspace (title starting \"$LABEL_5H \") — create it (see install.sh)"
+    [ -n "$ref7" ] || die "no '$LABEL_7D' sentinel workspace (title starting \"$LABEL_7D \") — create it (see install.sh)"
     # The custom sidebar's workspace data does NOT carry `progress` for idle
     # workspaces (only set on the active/agent workspace) — but the title always
-    # propagates. So encode the bar + percent + reset directly in the title.
+    # propagates. So encode the bar + percent + reset directly in the title. The
+    # label leads, the severity dot trails — both sides anchor on the label.
     local fh_bar sd_bar fh_dot sd_dot rerr
     fh_bar=$(make_bar "$fh_pct" 10); fh_dot=$(sev_dot "$fh_pct")
     sd_bar=$(make_bar "$sd_pct" 10); sd_dot=$(sev_dot "$sd_pct")
     # The renames are the actual user-visible write. The `ping` gate above passing
-    # does NOT guarantee a rename lands (socket auth could drop mid-run, or a
-    # sentinel id could be stale) — so check each one. A silent `&>/dev/null` here
-    # would let "updated:" print on a no-op; capture cmux's stderr and fail loudly.
-    # (`local rerr` is declared above, separately, so this assignment's exit code
-    # isn't masked by `local` always returning 0.)
-    rerr=$(cmux rename-workspace --workspace "$SENTINEL_5H" "${fh_dot}5h ${fh_bar} ${fh_pct}% ${fh_human}" 2>&1 >/dev/null) \
-      || die "rename rejected for 5h sentinel ($SENTINEL_5H): ${rerr:-no detail}"
-    rerr=$(cmux rename-workspace --workspace "$SENTINEL_7D" "${sd_dot}7d ${sd_bar} ${sd_pct}% ${sd_human}" 2>&1 >/dev/null) \
-      || die "rename rejected for 7d sentinel ($SENTINEL_7D): ${rerr:-no detail}"
-    echo "updated: 5h=${fh_pct}% (${fh_human})  7d=${sd_pct}% (${sd_human})"
+    # does NOT guarantee a rename lands (socket auth could drop mid-run, or a ref
+    # could go stale between resolve and write) — so check each one. A silent
+    # `&>/dev/null` here would let "updated:" print on a no-op; capture cmux's
+    # stderr and fail loudly. (`local rerr` is declared above, separately, so this
+    # assignment's exit code isn't masked by `local` always returning 0.)
+    rerr=$(cmux rename-workspace --workspace "$ref5" "$LABEL_5H ${fh_bar} ${fh_pct}% ${fh_human}${fh_dot}" 2>&1 >/dev/null) \
+      || die "rename rejected for $LABEL_5H sentinel ($ref5): ${rerr:-no detail}"
+    rerr=$(cmux rename-workspace --workspace "$ref7" "$LABEL_7D ${sd_bar} ${sd_pct}% ${sd_human}${sd_dot}" 2>&1 >/dev/null) \
+      || die "rename rejected for $LABEL_7D sentinel ($ref7): ${rerr:-no detail}"
+    echo "updated: ${LABEL_5H}=${fh_pct}% (${fh_human})  ${LABEL_7D}=${sd_pct}% (${sd_human})"
     return
   fi
 

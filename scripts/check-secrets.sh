@@ -45,11 +45,15 @@ if hits=$(printf '%s\n' "$files" | xargs grep -nEI \
   flag "token-shaped string" "$hits"
 fi
 
-# 4. Positive assertion: the shipped sidebar must still carry the placeholders.
-#    A clobbered file might have NO UUID (so check 1 passes) yet have lost the
-#    sentinel ids entirely — catch that regression too.
-if [ -f sidebars/workspaces.swift ] && ! grep -q 'REPLACE_WITH_.*_UUID' sidebars/workspaces.swift; then
-  flag "sidebar is missing its REPLACE_WITH_*_UUID placeholders" "sidebars/workspaces.swift"
+# 4. Positive assertion: the shipped sidebar must still match the sentinels by
+#    TITLE LABEL (the id-free scheme — cmux 0.64.15 removed stable workspace
+#    UUIDs). A clobbered file that lost these anchors would pass every check above
+#    yet render no usage panel — catch that regression. (This also means the
+#    committed and deployed sidebars are now identical: no id substitution, so no
+#    secret can leak through the sidebar at all.)
+if [ -f sidebars/workspaces.swift ] \
+  && ! grep -Eq 'w\.title\.hasPrefix\("(5h|7d) "\)' sidebars/workspaces.swift; then
+  flag "sidebar is missing its isClaudeMeter title anchors (w.title.hasPrefix)" "sidebars/workspaces.swift"
 fi
 
 if [ "$fail" -ne 0 ]; then

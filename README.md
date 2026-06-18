@@ -47,8 +47,9 @@ mechanisms feed it:
    the marker must be *static*, since an animated one freezes cmux's sidebar.)
 2. **Usage meters** — a poller (run by launchd every few minutes) computes each metric and writes
    it into a dedicated idle **"sentinel" workspace** by **renaming its title** (the same title
-   channel). The sidebar matches sentinels by id and renders their titles in the top `USAGE`
-   panel, hidden from the list.
+   channel). The sidebar matches sentinels by their **title label** (`5h`/`7d` prefix) and renders their
+   titles in the top `USAGE` panel, hidden from the list. (cmux removed stable workspace ids in
+   0.64.15, so the poller re-resolves each sentinel by title every run — restart-proof.)
 
 ```text
 launchd ──► bin/cmux-claude-usage.sh --update
@@ -80,9 +81,12 @@ cd cmux-sentinel
 `install.sh` copies the files into place (backing up anything it overwrites) and prints the
 remaining manual steps. In short:
 
-1. **Create two sentinel workspaces** in cmux (any dir) and grab their UUIDs
-   (`cmux sidebar-state --workspace workspace:<N> | grep '^tab='`); put them in
-   `~/.config/cmux/usage-sentinels.env` **and** in `sidebars/workspaces.swift` → `isUsageMeter()`.
+1. **Create two sentinel workspaces** in cmux (any dir) and name them so their **titles start with
+   the labels** — that's the whole wiring, no ids to copy (cmux 0.64.15 dropped stable workspace
+   UUIDs, so the poller + sidebar match by title): `cmux rename-workspace --workspace workspace:<N>
+   "5h"` (one for `5h`, one for `7d`). To use different labels, set `SENTINEL_5H_LABEL` /
+   `SENTINEL_7D_LABEL` in `~/.config/cmux/usage-sentinels.env` and the matching `hasPrefix()` in the
+   sidebar's `isClaudeMeter()`.
 2. **Test the poller:** `~/bin/cmux-claude-usage.sh --print` then `--update`.
 3. **Load the sidebar:** `cmux sidebar validate workspaces && cmux sidebar reload`, then
    right-click the sidebar button and pick *workspaces*.
@@ -104,9 +108,10 @@ Each provider gets its **own labelled section** in the panel — `CLAUDE USAGE` 
 later — the same component reused. A meter is just an idle "sentinel" workspace whose **title** a
 poller keeps updated. To **add a provider** (e.g. Codex):
 
-1. Create a sentinel workspace and grab its UUID. In `sidebars/workspaces.swift`: add an
-   `isCodexMeter(w)` predicate (copy `isClaudeMeter`), add `if isCodexMeter(w) { return true }` to
-   `isUsageMeter`, and uncomment/duplicate the `CODEX USAGE` section in the panel.
+1. Create a sentinel workspace and give it a distinct label (e.g. title starting with `cx`). In
+   `sidebars/workspaces.swift`: add an `isCodexMeter(w)` predicate (copy `isClaudeMeter`, swap the
+   `hasPrefix` label), add `if isCodexMeter(w) { return true }` to `isUsageMeter`, and
+   uncomment/duplicate the `CODEX USAGE` section in the panel.
 2. Write a small poller (copy `bin/cmux-claude-usage.sh`) that fetches the provider's usage and
    does `cmux rename-workspace --workspace <uuid> "<label> <bar> <pct>% <reset>"`.
 3. Schedule it (launchd) like the Claude one.

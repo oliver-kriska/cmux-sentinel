@@ -1,8 +1,8 @@
 #!/bin/bash
 # install.sh — place the opinionated cmux sidebar files into your config.
 # Idempotent and non-destructive: backs up anything it would overwrite.
-# Does NOT touch any secrets and does NOT auto-edit your sentinel UUIDs —
-# follow the printed "NEXT STEPS" to finish wiring it up.
+# Does NOT touch any secrets. Sentinels are matched by title label now (no ids
+# to edit) — follow the printed "NEXT STEPS" to finish wiring it up.
 set -euo pipefail
 
 REPO_URL="https://github.com/oliver-kriska/cmux-sentinel.git"
@@ -41,10 +41,10 @@ bak "$cfg/sidebars/workspaces.swift"
 install -m 0644 "$here/sidebars/workspaces.swift" "$cfg/sidebars/workspaces.swift"
 echo "  -> ~/.config/cmux/sidebars/workspaces.swift"
 
-# 3. sentinel env (only if missing — never clobber real UUIDs)
+# 3. sentinel env (only if missing — optional label overrides, no ids)
 if [ ! -f "$cfg/usage-sentinels.env" ]; then
   cp "$here/examples/usage-sentinels.env.example" "$cfg/usage-sentinels.env"
-  echo "  -> ~/.config/cmux/usage-sentinels.env (template — edit in your UUIDs)"
+  echo "  -> ~/.config/cmux/usage-sentinels.env (optional label overrides)"
 else
   echo "  ~/.config/cmux/usage-sentinels.env already exists, leaving it"
 fi
@@ -66,11 +66,13 @@ cat <<'NEXT'
 
 ✅ Files installed. NEXT STEPS (manual — they need your input):
 
-1. Create two throwaway "sentinel" workspaces in cmux (any directory), then grab their UUIDs:
-     cmux workspace list
-     cmux sidebar-state --workspace workspace:<N> | grep '^tab='
-   Put them in  ~/.config/cmux/usage-sentinels.env  (SENTINEL_5H / SENTINEL_7D)
-   AND in       ~/.config/cmux/sidebars/workspaces.swift  ->  isUsageMeter()  (the two == checks)
+1. Create two throwaway "sentinel" workspaces in cmux (any directory) and name them
+   so their TITLES start with the labels — that's the whole wiring (no ids to copy;
+   cmux dropped stable workspace UUIDs, so the poller + sidebar match by title):
+     cmux workspace list                                    # find the refs
+     cmux rename-workspace --workspace workspace:<N> "5h"   # one for 5h, one for 7d
+   To use different labels, set SENTINEL_5H_LABEL / SENTINEL_7D_LABEL in
+   ~/.config/cmux/usage-sentinels.env and the matching hasPrefix() in the sidebar.
 
 2. Test the poller:
      ~/bin/cmux-claude-usage.sh --print

@@ -23,6 +23,17 @@ break everything. Confirmed traps:
   `cmux rename-workspace`), never `set-progress`.
 - **`cmux sidebar-state` DIVERGES from what the sidebar sees** (it reads the canonical store). Never
   use it to predict the sidebar — verify with an in-sidebar `Text(...)` probe.
+- **cmux 0.64.15 REMOVED stable workspace UUIDs.** `cmux workspace list --json` now returns
+  `id: null`; the only handle is a positional `ref` (`workspace:N`) that **rotates across app
+  restarts and reorders**. The old scheme stored sentinel UUIDs in the env file and the sidebar —
+  that broke on the first restart (silent "offline" meters in the normal list). Both sides now anchor
+  on the **title label** instead: the poller `resolve_ref()`s each sentinel by the workspace whose
+  title starts with the `5h`/`7d` label (plus a space) and renames by the live ref; the sidebar's
+  `isClaudeMeter()` matches the same prefix. This is restart-proof because it re-resolves every run —
+  the same reason the bridge
+  reads a LIVE `$CMUX_WORKSPACE_ID` (still a UUID, set per-shell) instead of storing one. Don't
+  reintroduce a stored id. The committed and deployed sidebars are now byte-identical (no id
+  substitution at install).
 - **No native value bar for meters.** `ProgressView(value:)` needs a numeric `progress`, which idle
   sentinels don't have — so meters are Unicode block text bars (`▏▎▍▌▋▊▉█`). Utilization **color**
   can't come from data either; it's a colored emoji in the title (🟡/🔴).
@@ -51,7 +62,7 @@ cmux sidebar validate workspaces && cmux sidebar reload   # validate only PARSES
 ## Architecture / where things live
 
 ```text
-sidebars/workspaces.swift  the sidebar. isClaudeMeter() = `==` id list per provider; isUsageMeter() = any.
+sidebars/workspaces.swift  the sidebar. isClaudeMeter() = title-label `.hasPrefix` per provider; isUsageMeter() = any.
 bin/cmux-claude-usage.sh    Claude usage poller. make_bar / sev_dot / mark_offline / bucket_field.
 hooks/cmux-bridge.sh        Claude Code → cmux agent-state bridge (⚡ working / ⏳ compacting rows).
 examples/                   usage-sentinels.env + launchd plist templates.
@@ -80,13 +91,13 @@ examples/                   usage-sentinels.env + launchd plist templates.
 ## Conventions & security
 
 - **Never commit secrets.** The OAuth token is read from the macOS Keychain at runtime — keep it
-  that way. No tokens, no real workspace UUIDs (use `REPLACE_WITH_*` placeholders), no usernames in
-  committed files.
+  that way. No tokens, no real workspace UUIDs, no usernames in committed files. (The sidebar carries
+  no ids at all now — it matches sentinels by title label — so there's nothing to placeholder.)
 - Dependency-light: bash + `jq` + `curl` + macOS `date`. Terse comments about *why*.
-- **Run `make check` before proposing a commit** — shellcheck + the secret/placeholder guard
+- **Run `make check` before proposing a commit** — shellcheck + the secret guard
   (`scripts/check-secrets.sh`) + markdownlint + sidebar parse. `lefthook install` wires the same
   gates into git hooks; CI runs `make ci`. The secret guard is the load-bearing one (blocks real
-  UUIDs / tokens / `/Users/<name>` paths and enforces the sidebar's `REPLACE_WITH_*` placeholders).
+  UUIDs / tokens / `/Users/<name>` paths and asserts the sidebar keeps its title-label meter anchors).
 - See `CONTRIBUTING.md` for the dev loop and PR norms. (Maintainers may keep gitignored working
   docs under `.claude/` — e.g. `.claude/NOTES.local.md` with the full debugging history and
   `.claude/HANDOFF.md` for resuming a session — never committed.)

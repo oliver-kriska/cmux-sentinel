@@ -121,18 +121,24 @@ func repoColor(_ w) -> String {
   return "#8A9199"
 }
 // ── usage meters (hidden sentinels) ───────────────────────────────
-// ONE predicate per provider (matched by exact id — the interpreter has no
-// working String .contains, and == is fine). Keep ids in sync with the poller.
+// ONE predicate per provider, matched by the sentinel's TITLE LABEL (not a
+// workspace id). cmux 0.64.15 removed stable workspace UUIDs — the only handle
+// is a positional ref that rotates on every app restart, so an id hard-coded
+// here would go stale each restart and the meters would silently fall back into
+// the normal list. The poller keeps each sentinel's title starting with its
+// label ("5h "/"7d "), `.hasPrefix` works in the interpreter (proven), and the
+// bridge prefixes real agent workspaces with ⚡/⏳ (never a bare label), so the
+// label is a collision-free, restart-proof anchor both sides share.
 func isClaudeMeter(_ w) -> Bool {
-  if w.id == "REPLACE_WITH_5H_SENTINEL_UUID" { return true }  // Claude — 5h session
-  if w.id == "REPLACE_WITH_7D_SENTINEL_UUID" { return true }  // Claude — 7d weekly
+  if w.title.hasPrefix("5h ") { return true }  // Claude — 5h session window
+  if w.title.hasPrefix("7d ") { return true }  // Claude — 7d weekly window
   return false
 }
-// Add a provider: copy isClaudeMeter with the new sentinel id(s), add an
+// Add a provider: copy isClaudeMeter with the new sentinel label(s), add an
 // `if isCodexMeter(w) { return true }` line to isUsageMeter, and a matching
 // section in the panel (search "CLAUDE USAGE").
 // func isCodexMeter(_ w) -> Bool {
-//   if w.id == "REPLACE_WITH_CODEX_SENTINEL_UUID" { return true }
+//   if w.title.hasPrefix("cx ") { return true }
 //   return false
 // }
 func isUsageMeter(_ w) -> Bool {
