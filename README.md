@@ -100,6 +100,27 @@ remaining manual steps. In short:
 
 **Prereqs:** macOS, cmux (custom sidebars / beta), Claude Code logged in, `jq`, `curl`, `git`.
 
+## Updating
+
+There's no separate updater — **re-run the installer**. It re-deploys every file and backs up
+what it replaces.
+
+```bash
+# curl install — the bootstrap git-pulls ~/.cache/cmux-sentinel, then re-installs:
+curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/install.sh | bash
+
+# git clone:
+git -C cmux-sentinel pull && cmux-sentinel/install.sh
+```
+
+Then `cmux sidebar reload` to repaint. Notes:
+
+- An **already-installed bridge updates automatically** on a plain re-run — no `WITH_BRIDGE=1`
+  needed (that flag is only for *adding* the bridge the first time).
+- The launchd poller picks up the new script on its next run; **bridge script-body changes are
+  read live**, so only a brand-new hook-event *registration* needs a Claude Code restart.
+- `make doctor` (or `~/bin/cmux-sentinel-doctor.sh`) confirms everything is still wired afterward.
+
 ---
 
 ## Usage meters (providers)

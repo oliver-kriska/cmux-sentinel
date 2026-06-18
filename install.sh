@@ -1,6 +1,8 @@
 #!/bin/bash
 # install.sh — place the opinionated cmux sidebar files into your config.
-# Idempotent and non-destructive: backs up anything it would overwrite.
+# Idempotent and non-destructive: backs up anything it would overwrite. Re-run it
+# any time to UPDATE — the curl bootstrap git-pulls the cache, then this re-deploys
+# every file (and refreshes an existing bridge automatically; see step 5).
 # Does NOT touch any secrets. Sentinels are matched by title label now (no ids
 # to edit) — follow the printed "NEXT STEPS" to finish wiring it up.
 set -euo pipefail
@@ -55,8 +57,12 @@ bak "$plist"
 sed "s#/Users/YOUR_USERNAME#$HOME#g" "$here/examples/com.cmux-claude-usage.plist" > "$plist"
 echo "  -> $plist"
 
-# 5. optional working-state hooks bridge
-if [ "${WITH_BRIDGE:-0}" = "1" ]; then
+# 5. working-state hooks bridge. Install when explicitly requested (WITH_BRIDGE=1)
+#    OR when one is already present — so a plain re-run still UPDATES an existing
+#    bridge instead of silently leaving it stale. (Without this, a bridge user who
+#    re-runs the bare installer to update would get a new sidebar + poller but a
+#    months-old bridge.) The hooks themselves are registered once in settings.json.
+if [ "${WITH_BRIDGE:-0}" = "1" ] || [ -f "$HOME/.claude/hooks/cmux-bridge.sh" ]; then
   bak "$HOME/.claude/hooks/cmux-bridge.sh"
   install -m 0755 "$here/hooks/cmux-bridge.sh" "$HOME/.claude/hooks/cmux-bridge.sh"
   echo "  -> ~/.claude/hooks/cmux-bridge.sh  (register events in ~/.claude/settings.json — see README)"
@@ -94,4 +100,7 @@ cat <<'NEXT'
      ~/bin/cmux-sentinel-doctor.sh        # or, from the repo:  make doctor
 
 (Optional working-state rows: re-run with  WITH_BRIDGE=1 ./install.sh  and wire the hooks per README.)
+
+To UPDATE later: re-run this installer (curl one-liner or `git pull && ./install.sh`), then
+`cmux sidebar reload`. An already-installed bridge refreshes automatically — no flag needed.
 NEXT
