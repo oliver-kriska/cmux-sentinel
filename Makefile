@@ -11,7 +11,7 @@
 SHELL   := bash
 SCRIPTS := bin/cmux-claude-usage.sh bin/cmux-sentinel-doctor.sh hooks/cmux-bridge.sh \
            install.sh scripts/check-secrets.sh tests/bridge-state.sh
-MD      := $(wildcard *.md)
+MD      := $(wildcard *.md) $(wildcard docs/*.md)
 
 .PHONY: help check ci lint shellcheck secrets markdown test doctor sidebar fmt fmt-check
 

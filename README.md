@@ -156,6 +156,10 @@ The cmux sidebar runs a **subset** of SwiftUI. Hard-won facts (respect these in 
 - `cmux sidebar validate` only **parses**; it passes on layouts that render blank. Bisect runtime
   errors by stripping the body to `Text("hi")` and adding back piece by piece.
 
+The full, standalone version of these traps (plus the blank-sidebar debugging method) lives in
+[docs/cmux-custom-sidebar-cheatsheet.md](docs/cmux-custom-sidebar-cheatsheet.md) — a one-screen field
+guide that complements cmux's official [authoring reference](https://cmux.com/docs/custom-sidebars).
+
 ## Layout
 
 ```text
