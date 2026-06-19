@@ -69,10 +69,15 @@ echo "Installing opinionated cmux sidebar from $here"
 
 mkdir -p "$HOME/bin" "$cfg/sidebars" "$HOME/.claude/hooks" "$HOME/Library/LaunchAgents"
 
-# 1. poller + doctor
+# 1. pollers + doctor. Both pollers are deployed (the Codex one self-gates and is a
+#    no-op until you opt in via USAGE_PROVIDERS — see usage-sentinels.env), so an
+#    out-of-the-box install is Claude-only but Codex is one env edit away.
 bak "$HOME/bin/cmux-claude-usage.sh"
 install -m 0755 "$here/bin/cmux-claude-usage.sh" "$HOME/bin/cmux-claude-usage.sh"
 echo "  -> ~/bin/cmux-claude-usage.sh"
+bak "$HOME/bin/cmux-codex-usage.sh"
+install -m 0755 "$here/bin/cmux-codex-usage.sh" "$HOME/bin/cmux-codex-usage.sh"
+echo "  -> ~/bin/cmux-codex-usage.sh  (opt-in: add 'codex' to USAGE_PROVIDERS)"
 install -m 0755 "$here/bin/cmux-sentinel-doctor.sh" "$HOME/bin/cmux-sentinel-doctor.sh"
 echo "  -> ~/bin/cmux-sentinel-doctor.sh  (run anytime to health-check the setup)"
 
@@ -89,11 +94,17 @@ else
   echo "  ~/.config/cmux/usage-sentinels.env already exists, leaving it"
 fi
 
-# 4. launchd plist, templated to this user
+# 4. launchd plists, templated to this user. The Claude one is bootstrapped in the
+#    NEXT STEPS; the Codex one is deployed dormant (not loaded) so opting in is just
+#    a `launchctl bootstrap` once you've set USAGE_PROVIDERS + created cx sentinels.
 plist="$HOME/Library/LaunchAgents/com.cmux-claude-usage.plist"
 bak "$plist"
 sed "s#/Users/YOUR_USERNAME#$HOME#g" "$here/examples/com.cmux-claude-usage.plist" > "$plist"
 echo "  -> $plist"
+cxplist="$HOME/Library/LaunchAgents/com.cmux-codex-usage.plist"
+bak "$cxplist"
+sed "s#/Users/YOUR_USERNAME#$HOME#g" "$here/examples/com.cmux-codex-usage.plist" > "$cxplist"
+echo "  -> $cxplist  (dormant — bootstrap it only if you enable Codex)"
 
 # 5. working-state hooks bridge. Install when explicitly requested (WITH_BRIDGE=1)
 #    OR when one is already present — so a plain re-run still UPDATES an existing

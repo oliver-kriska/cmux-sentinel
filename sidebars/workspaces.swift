@@ -155,16 +155,19 @@ func isClaudeMeter(_ w) -> Bool {
   if w.title.hasPrefix("7d ") { return true }  // Claude — 7d weekly window
   return false
 }
-// Add a provider: copy isClaudeMeter with the new sentinel label(s), add an
-// `if isCodexMeter(w) { return true }` line to isUsageMeter, and a matching
-// section in the panel (search "CLAUDE USAGE").
-// func isCodexMeter(_ w) -> Bool {
-//   if w.title.hasPrefix("cx ") { return true }
-//   return false
-// }
+// Codex provider — same shape as isClaudeMeter, distinct labels so the two never
+// collide ("cx5h"/"cx7d" never start with "5h "/"7d "). Fed by bin/cmux-codex-usage.sh,
+// which reads ~/.codex rate_limits (primary=5h, secondary=weekly).
+func isCodexMeter(_ w) -> Bool {
+  if w.title == "cx5h" { return true }           // bare bootstrap label
+  if w.title.hasPrefix("cx5h ") { return true }  // Codex — 5h window (primary)
+  if w.title == "cx7d" { return true }           // bare bootstrap label
+  if w.title.hasPrefix("cx7d ") { return true }  // Codex — weekly window (secondary)
+  return false
+}
 func isUsageMeter(_ w) -> Bool {
   if isClaudeMeter(w) { return true }
-  // if isCodexMeter(w) { return true }
+  if isCodexMeter(w) { return true }
   return false
 }
 
@@ -322,10 +325,14 @@ VStack(alignment: .leading, spacing: 0) {
   Divider()
 
   // CLAUDE USAGE — one labelled section per provider (same component reused).
+  // Meters sort by WINDOW length (the short 5h/cx5h above the weekly 7d/cx7d), not
+  // by workspace .index — index depends on sentinel creation order and reshuffles
+  // across restarts, which would flip the rows. The 5h sentinels carry "5h" in the
+  // title; the weekly ones don't.
   if workspaces.filter { isClaudeMeter($0) }.count > 0 {
     VStack(alignment: .leading, spacing: 6) {
       Text("CLAUDE USAGE").font(.system(size: 10, design: .monospaced)).bold().foregroundColor("#8A9199")
-      ForEach(workspaces.filter { isClaudeMeter($0) }.sorted { $0.index < $1.index }) { w in
+      ForEach(workspaces.filter { isClaudeMeter($0) }.sorted { $0.title.contains("5h") && !$1.title.contains("5h") }) { w in
         Text(w.title)
           .font(.system(size: 12, design: .monospaced))
           .foregroundColor("#CCCAC2")
@@ -335,17 +342,20 @@ VStack(alignment: .leading, spacing: 0) {
     Divider()
   }
 
-  // Next provider — copy the block above, swap predicate + header:
-  // if workspaces.filter { isCodexMeter($0) }.count > 0 {
-  //   VStack(alignment: .leading, spacing: 6) {
-  //     Text("CODEX USAGE").font(.system(size: 10, design: .monospaced)).bold().foregroundColor("#8A9199")
-  //     ForEach(workspaces.filter { isCodexMeter($0) }.sorted { $0.index < $1.index }) { w in
-  //       Text(w.title).font(.system(size: 12, design: .monospaced)).foregroundColor("#CCCAC2")
-  //     }
-  //   }
-  //   .padding(9)
-  //   Divider()
-  // }
+  // CODEX USAGE — same component; hidden unless Codex sentinels exist, so it stays
+  // invisible for Claude-only users. Fed by bin/cmux-codex-usage.sh.
+  if workspaces.filter { isCodexMeter($0) }.count > 0 {
+    VStack(alignment: .leading, spacing: 6) {
+      Text("CODEX USAGE").font(.system(size: 10, design: .monospaced)).bold().foregroundColor("#8A9199")
+      ForEach(workspaces.filter { isCodexMeter($0) }.sorted { $0.title.contains("5h") && !$1.title.contains("5h") }) { w in
+        Text(w.title)
+          .font(.system(size: 12, design: .monospaced))
+          .foregroundColor("#CCCAC2")
+      }
+    }
+    .padding(9)
+    Divider()
+  }
 
   // WORKSPACES — labelled section header + count, then the list. This is the
   // delimiter between the usage panel and the workspace list.

@@ -53,19 +53,27 @@ reload` after each) until it blanks. That isolates the bad construct in ~3 steps
 cp sidebars/workspaces.swift ~/.config/cmux/sidebars/workspaces.swift
 cmux sidebar validate workspaces && cmux sidebar reload   # validate only PARSES — also eyeball it
 
-# poller (no cmux writes)
+# pollers (no cmux writes unless --update)
 ./bin/cmux-claude-usage.sh --print     # parsed values
 ./bin/cmux-claude-usage.sh --raw       # raw API JSON (no token)
 ./bin/cmux-claude-usage.sh --update    # actually renames the sentinels
+./bin/cmux-codex-usage.sh --print      # Codex: latest local rate_limits snapshot
+./bin/cmux-codex-usage.sh --raw        # raw rate_limits JSON from ~/.codex rollout
+./bin/cmux-codex-usage.sh --update     # renames cx5h/cx7d (needs USAGE_PROVIDERS to list codex)
+
+# offline tests (stub cmux/security/curl/$HOME — run in CI too)
+make test   # bridge-state (36) + poller-gate (10, Claude) + codex-poller (12, Codex)
 ```
 
 ## Architecture / where things live
 
 ```text
-sidebars/workspaces.swift  the sidebar. isClaudeMeter() = title-label `.hasPrefix` per provider; isUsageMeter() = any.
+sidebars/workspaces.swift  the sidebar. isClaudeMeter()/isCodexMeter() = title-label `.hasPrefix` per provider; isUsageMeter() = any.
 bin/cmux-claude-usage.sh    Claude usage poller. make_bar / sev_dot / mark_offline / bucket_field.
+bin/cmux-codex-usage.sh     Codex usage poller (local ~/.codex rollout). latest_snapshot / make_bar / sev_dot / mark_stale.
 hooks/cmux-bridge.sh        Claude Code → cmux agent-state bridge (⚡ working / ⏳ compacting / ❓ waiting-on-you rows).
-examples/                   usage-sentinels.env + launchd plist templates.
+tests/                      bridge-state.sh + poller-gate.sh (Claude) + codex-poller.sh (Codex). `make test`.
+examples/                   usage-sentinels.env + launchd plist templates (com.cmux-claude-usage / com.cmux-codex-usage).
 ```
 
 - **Agent state rides STATIC title markers** the bridge keeps at the FRONT of the title — `⚡` =
@@ -84,10 +92,16 @@ examples/                   usage-sentinels.env + launchd plist templates.
 
 - **Usage meters group by provider:** each provider gets its own labelled panel section
   (`CLAUDE USAGE`, `CODEX USAGE`, …) — same component reused. A meter is just an idle "sentinel"
-  workspace whose title a poller keeps updated. To add a provider: create a sentinel, add an
-  `isCodexMeter()` predicate + an `if isCodexMeter(w)` line to `isUsageMeter()` + a `CODEX USAGE`
-  panel section, and copy the poller with a new data source. (Whether Codex exposes a usable usage
-  endpoint is an open research question.)
+  workspace whose title a poller keeps updated. **Two providers ship:** Claude
+  (`bin/cmux-claude-usage.sh`, OAuth usage endpoint) and Codex (`bin/cmux-codex-usage.sh`). Codex
+  needs **no token/network** — it reads `rate_limits` (`primary`=5h, `secondary`=weekly) from the
+  LATEST non-null snapshot in `~/.codex/sessions/**/rollout-*.jsonl` (the schema is
+  community-observed, not an OpenAI contract, and `rate_limits` is often `null` esp. in `codex
+  exec` — openai/codex#14880 — so the poller scans newest-first and stamps `⚠ stale` if none is
+  usable; labels `cx5h`/`cx7d`). Decision/research:
+  `.claude/research/2026-06-19-codex-usage-data-source.md`. To add a THIRD provider: create a
+  sentinel, add an `isXMeter()` predicate + an `if isXMeter(w)` line to `isUsageMeter()` + an
+  `X USAGE` panel section, and copy a poller with a new data source.
 - **Provider selection is gated, not configured in the sidebar** (it can't read config — only
   workspace data). A provider's panel shows IFF its sentinels exist, and the sidebar auto-hides any
   provider with a zero `count`. So selection lives in setup: which pollers run + which sentinels

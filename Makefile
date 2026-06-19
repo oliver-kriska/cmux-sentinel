@@ -9,8 +9,9 @@
 #   make help    list targets
 
 SHELL   := bash
-SCRIPTS := bin/cmux-claude-usage.sh bin/cmux-sentinel-doctor.sh hooks/cmux-bridge.sh \
-           install.sh scripts/check-secrets.sh tests/bridge-state.sh tests/poller-gate.sh
+SCRIPTS := bin/cmux-claude-usage.sh bin/cmux-codex-usage.sh bin/cmux-sentinel-doctor.sh \
+           hooks/cmux-bridge.sh install.sh scripts/check-secrets.sh \
+           tests/bridge-state.sh tests/poller-gate.sh tests/codex-poller.sh
 MD      := $(wildcard *.md) $(wildcard docs/*.md)
 
 .PHONY: help check ci lint shellcheck secrets markdown test doctor sidebar fmt fmt-check
@@ -37,10 +38,12 @@ markdown:
 
 # state machines: offline, stub cmux/security/curl, run on Linux CI too.
 #   bridge-state — agent activity markers (⚡/⏳/❓)
-#   poller-gate  — usage-poller provider gating (disabled / not-installed / offline / ok)
+#   poller-gate  — Claude usage-poller provider gating (disabled / not-installed / offline / ok)
+#   codex-poller — Codex usage-poller gating + rollout snapshot parsing (disabled / not-installed / stale / ok)
 test:
 	bash tests/bridge-state.sh
 	bash tests/poller-gate.sh
+	bash tests/codex-poller.sh
 
 # health-check the live setup (read-only) — bridge/hooks/launchd/automation/sentinels.
 doctor:

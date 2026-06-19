@@ -55,6 +55,12 @@ if [ -f sidebars/workspaces.swift ] \
   && ! grep -Eq 'w\.title\.hasPrefix\("(5h|7d) "\)' sidebars/workspaces.swift; then
   flag "sidebar is missing its isClaudeMeter title anchors (w.title.hasPrefix)" "sidebars/workspaces.swift"
 fi
+# Same for the Codex provider — a clobber that dropped isCodexMeter would silently
+# kill the CODEX USAGE panel for everyone who opted in.
+if [ -f sidebars/workspaces.swift ] \
+  && ! grep -Eq 'w\.title\.hasPrefix\("cx(5h|7d) "\)' sidebars/workspaces.swift; then
+  flag "sidebar is missing its isCodexMeter title anchors (w.title.hasPrefix)" "sidebars/workspaces.swift"
+fi
 
 if [ "$fail" -ne 0 ]; then
   echo >&2

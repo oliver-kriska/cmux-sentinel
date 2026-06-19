@@ -23,14 +23,17 @@ background pollers. Batteries included, easy to fork and tweak.
   `idle` (dim) — shown by row colour with a two-line subtitle that keeps agent activity separate
   from repo state (branch · dirty · PR). The header shows live per-state counts.
 - **Inline actions**: click to select, `×` to close, unread badges.
-- **Usage meters** — a top panel of live progress bars fed by background pollers. Ships with a
-  **Claude Code** provider (rolling 5-hour session + 7-day weekly), with a smooth sub-cell
-  Unicode bar, a `🟡`/`🔴` dot only when a limit gets close, and an `⚠ offline` marker when data
-  goes stale. The numbers match Claude Desktop's *Plan usage limits* pane.
+- **Usage meters** — a top panel of live progress bars fed by background pollers. Ships with two
+  providers — **Claude Code** (rolling 5-hour session + 7-day weekly, via the OAuth usage endpoint)
+  and **Codex** (the same two windows, read from local `~/.codex` rollout files — no token, no
+  network) — each with a smooth sub-cell Unicode bar, a `🟡`/`🔴` dot only when a limit gets close,
+  and an `⚠ offline`/`⚠ stale` marker when data goes stale. Providers are opt-in and self-gating:
+  an out-of-the-box install shows **Claude only**, and a provider that isn't installed can never
+  appear or crash anything (see "Usage meters" below).
 
-**Roadmap / help wanted:** more usage-meter providers — **Codex**, and whatever else exposes a
-usage signal. The meter mechanism is provider-agnostic (see "Usage meters" below), so adding one
-is mostly a small poller script.
+**Roadmap / help wanted:** more usage-meter providers — anything else that exposes a usage signal.
+The meter mechanism is provider-agnostic (see "Usage meters" below), so adding one is mostly a
+small poller script.
 
 ---
 
@@ -186,9 +189,9 @@ Then `cmux sidebar reload` to repaint. Notes:
 
 ## Usage meters (providers)
 
-Each provider gets its **own labelled section** in the panel — `CLAUDE USAGE` now, `CODEX USAGE`
-later — the same component reused. A meter is just an idle "sentinel" workspace whose **title** a
-poller keeps updated.
+Each provider gets its **own labelled section** in the panel — `CLAUDE USAGE` and `CODEX USAGE` —
+the same component reused. A meter is just an idle "sentinel" workspace whose **title** a poller
+keeps updated.
 
 ### Choosing which providers show (and never crashing on a missing one)
 
@@ -210,20 +213,61 @@ not a sidebar edit, and gives three robustness guarantees:
   panel. `~/bin/cmux-sentinel-doctor.sh` reports installed × enabled × sentinel-present and flags any
   leftover panel.
 
-### Add a provider (e.g. Codex)
+### Enable the Codex provider
 
-1. Create a sentinel workspace and give it a distinct label (e.g. title starting with `cx`). In
-   `sidebars/workspaces.swift`: add an `isCodexMeter(w)` predicate (copy `isClaudeMeter`, swap the
-   `hasPrefix` label), add `if isCodexMeter(w) { return true }` to `isUsageMeter`, and
-   uncomment/duplicate the `CODEX USAGE` section in the panel.
-2. Write a small poller (copy `bin/cmux-claude-usage.sh`) — keep the self-gating pattern: a
-   `provider_available()` (detect the provider's creds/CLI) + a `PROVIDER_ID` checked against
-   `USAGE_PROVIDERS`, so it exits cleanly when Codex is absent or disabled. It fetches usage and does
+Codex ships built-in but is **off by default** (out-of-the-box is Claude-only). To turn it on:
+
+1. **Enable the poller:** add `codex` to `USAGE_PROVIDERS` in `~/.config/cmux/usage-sentinels.env`,
+   e.g. `USAGE_PROVIDERS="claude codex"` (or just `"codex"` to disable Claude). With the name
+   absent the Codex poller is a no-op, so this is the on/off switch.
+2. **Create two sentinel workspaces** and name them so their titles start with the Codex labels:
+   `cmux rename-workspace --workspace workspace:<N> "cx5h"` (one for `cx5h`, one for `cx7d`).
+   Override `SENTINEL_CX5H_LABEL` / `SENTINEL_CX7D_LABEL` in the env file if you want different
+   labels (match them in the sidebar's `isCodexMeter()`).
+3. **Test:** `~/bin/cmux-codex-usage.sh --print`, then `--update`.
+4. **Schedule it:** `install.sh` already deployed `~/Library/LaunchAgents/com.cmux-codex-usage.plist`
+   (dormant). Just load it: `launchctl bootstrap gui/$(id -u)
+   ~/Library/LaunchAgents/com.cmux-codex-usage.plist`.
+
+`~/bin/cmux-sentinel-doctor.sh` cross-checks installed × enabled × sentinel-present for both
+providers. If Codex isn't installed (`codex` not on PATH and no `~/.codex/sessions`), the poller
+exits cleanly and no panel shows.
+
+### Add a NEW provider
+
+The two built-in providers (Claude, Codex) are the template. To add a third:
+
+1. Create a sentinel workspace with a distinct label (a prefix that can't collide with the others).
+   In `sidebars/workspaces.swift`: add an `isXMeter(w)` predicate (copy `isCodexMeter`, swap the
+   `hasPrefix` label), add `if isXMeter(w) { return true }` to `isUsageMeter`, and add an `X USAGE`
+   section to the panel (copy the `CODEX USAGE` block).
+2. Write a small poller (copy `bin/cmux-codex-usage.sh` or `cmux-claude-usage.sh`) — keep the
+   self-gating pattern: a `provider_available()` (detect the provider's creds/CLI/data) + a
+   `PROVIDER_ID` checked against `USAGE_PROVIDERS`, so it exits cleanly when the provider is absent
+   or disabled. It computes usage and does
    `cmux rename-workspace --workspace <ref> "<label> <bar> <pct>% <reset>"`.
-3. Schedule it (launchd) like the Claude one. Users who want it run its poller; users who don't,
-   don't — nothing else to configure.
+3. Schedule it (launchd) like the others. Users who want it run its poller; users who don't, don't.
 
 PRs adding providers are very welcome.
+
+### Codex provider — data source
+
+Codex writes a per-turn rate-limit snapshot into its **local** session rollout files — no token, no
+network:
+
+```text
+~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ts>-<uuid>.jsonl
+  └─ a "rate_limits" object: { primary: {used_percent, window_minutes:300,   resets_at},
+                               secondary:{used_percent, window_minutes:10080, resets_at} }
+```
+
+`primary` = the rolling 5-hour window, `secondary` = the weekly window — the same two the Claude
+meter shows. The poller scans the newest rollout files and takes the **latest non-null** snapshot
+(Codex frequently writes `rate_limits: null`, especially in `codex exec`/non-interactive runs —
+[openai/codex#14880](https://github.com/openai/codex/issues/14880)); if none is found it stamps
+`⚠ stale`. This schema is **community-observed, not an OpenAI contract**, so the poller parses
+defensively (recursive search for `rate_limits`, tolerant of missing keys, accepts `resets_at` or
+`resets_in_seconds`).
 
 ### Claude provider — data source
 
@@ -270,12 +314,15 @@ guide that complements cmux's official [authoring reference](https://cmux.com/do
 ## Layout
 
 ```text
-bin/cmux-claude-usage.sh     Claude usage poller (--print | --raw | --update)
-bin/cmux-sentinel-doctor.sh  read-only health-check of the whole pipeline
-sidebars/workspaces.swift    the sidebar (the opinionated design + USAGE panel)
+bin/cmux-claude-usage.sh     Claude usage poller — OAuth usage endpoint (--print | --raw | --update)
+bin/cmux-codex-usage.sh      Codex usage poller — local ~/.codex rollout files (--print | --raw | --update)
+bin/cmux-sentinel-doctor.sh  read-only health-check of the whole pipeline (both providers)
+sidebars/workspaces.swift    the sidebar (the opinionated design + USAGE panels)
 hooks/cmux-bridge.sh         Claude Code → cmux agent-state bridge (⚡ working / ⏳ compacting / ❓ waiting-on-you)
 tests/bridge-state.sh        offline bridge state-machine test (stubs cmux; `make test`)
-examples/                    usage-sentinels.env + launchd plist templates
+tests/poller-gate.sh         offline Claude poller provider-gating test
+tests/codex-poller.sh        offline Codex poller gating + rollout-parsing test
+examples/                    usage-sentinels.env + launchd plist templates (Claude + Codex)
 install.sh                   file placement + next-steps
 ```
 

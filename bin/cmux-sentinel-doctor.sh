@@ -110,6 +110,35 @@ if have cmux && have jq; then
   done
 else warn "cmux or jq unavailable — can't check sentinels"; fi
 
+# Codex provider — same installed × enabled × sentinel cross-check. Codex usage is
+# read from local rollout files (no creds), so "installed" = the CLI or ~/.codex.
+lblcx5="${SENTINEL_CX5H_LABEL:-cx5h}"; lblcx7="${SENTINEL_CX7D_LABEL:-cx7d}"
+codex_installed() { command -v codex >/dev/null 2>&1 || [ -d "$HOME/.codex/sessions" ]; }
+case " $providers " in *" codex "*) codex_on=1 ;; *) codex_on=0 ;; esac
+if codex_installed; then codex_inst=1; else codex_inst=0; fi
+
+if [ "$codex_on" = 1 ] && [ "$codex_inst" = 1 ]; then
+  ok "codex: installed + enabled → meters active"
+elif [ "$codex_on" = 1 ]; then
+  warn "codex: enabled but NOT installed here — poller exits cleanly, no panel"
+elif [ "$codex_inst" = 1 ]; then
+  ok "codex: installed but not enabled — add it to USAGE_PROVIDERS (\"claude codex\") to show its meters"
+else
+  ok "codex: not installed and not enabled — nothing to do"
+fi
+
+if [ "$codex_on" = 1 ] && have cmux && have jq; then
+  for lbl in "$lblcx5" "$lblcx7"; do
+    ref="$(cmux workspace list --json 2>/dev/null \
+      | jq -r --arg l "$lbl" '.workspaces[] | select(.title == $l or (.title|startswith($l+" "))) | .ref' 2>/dev/null | head -1)"
+    if [ -n "$ref" ]; then
+      if [ "$codex_inst" = 1 ]; then ok "'$lbl' sentinel present ($ref)"
+      else warn "'$lbl' sentinel present ($ref) but codex is uninstalled — close it to hide the panel: cmux workspace close $ref"; fi
+    elif [ "$codex_inst" = 1 ]; then warn "no '$lbl' sentinel (title \"$lbl\" or starting \"$lbl \") — create it (see install.sh)"
+    fi
+  done
+fi
+
 echo
 if [ "$fails" -gt 0 ]; then printf '\033[31m%d problem(s), %d warning(s).\033[0m\n' "$fails" "$warns"; exit 1
 elif [ "$warns" -gt 0 ]; then printf '\033[33mAll critical checks passed, %d warning(s).\033[0m\n' "$warns"; exit 0
