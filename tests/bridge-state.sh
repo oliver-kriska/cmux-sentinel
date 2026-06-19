@@ -44,6 +44,8 @@ WORKDIR="$ROOT/cmux-sentinel-work/$FAKE_WS"
 pass=0; fail=0
 title() { cat "$ROOT/.title" 2>/dev/null; }
 fire()  { echo '{}' | CMUX_CLAUDE_PID="$2" bash "$BRIDGE" "$1"; }
+# fire a PreToolUse carrying a tool_name (for the AskUserQuestion/ExitPlanMode path)
+firet() { printf '{"tool_name":"%s"}' "$3" | CMUX_CLAUDE_PID="$2" bash "$BRIDGE" "$1"; }
 ck()    { if [ "$(title)" = "$2" ]; then pass=$((pass + 1)); printf '  ✓ %s\n' "$1"
           else fail=$((fail + 1)); printf '  ✗ %s — got [%s] want [%s]\n' "$1" "$(title)" "$2"; fi; }
 
@@ -79,6 +81,47 @@ fire Stop       "$PID2"; ck "B stops → idle"       "multi"
 echo "E: restart wiped \$TMPDIR but title kept ⚡ → SessionStart sweep strips it"
 rm -rf "$WORKDIR"; printf '⚡orphan' > "$ROOT/.title"
 fire SessionStart "$A"; ck "orphan marker (no live session) stripped → idle" "orphan"
+
+echo "F: asking a question (AskUserQuestion) → ❓, answered → ⚡, stop → idle"
+printf 'enaia' > "$ROOT/.title"; rm -rf "$WORKDIR"
+fire  PreToolUse "$A";                  ck "working → ⚡"             "⚡enaia"
+firet PreToolUse "$A" AskUserQuestion;  ck "AskUserQuestion → ❓"     "❓enaia"
+firet PreToolUse "$A" ExitPlanMode;     ck "ExitPlanMode also → ❓"   "❓enaia"
+fire  PreToolUse "$A";                  ck "answered, next tool → ⚡" "⚡enaia"
+fire  Stop       "$A";                  ck "Stop → idle"             "enaia"
+
+echo "G: MID-TURN Notification (permission prompt) → ❓, then resume → ⚡"
+printf 'enaia' > "$ROOT/.title"; rm -rf "$WORKDIR"
+fire PreToolUse   "$A"; ck "working → ⚡"                  "⚡enaia"
+fire Notification "$A"; ck "permission prompt → ❓ (asking)" "❓enaia"
+fire PreToolUse   "$A"; ck "user responded → ⚡"           "⚡enaia"
+fire Stop         "$A"; ck "Stop → idle"                  "enaia"
+
+echo "G2: idle Notification AFTER Stop must NOT flip a finished workspace to ❓"
+printf 'enaia' > "$ROOT/.title"; rm -rf "$WORKDIR"
+fire PreToolUse   "$A"; ck "working → ⚡"                  "⚡enaia"
+fire Stop         "$A"; ck "Stop → idle"                  "enaia"
+fire Notification "$A"; ck "idle 'waiting for input' notice ignored → still idle" "enaia"
+fire Notification "$A"; ck "repeat idle notice still ignored → idle"              "enaia"
+
+echo "H: compacting outranks a waiting flag"
+printf 'enaia' > "$ROOT/.title"; rm -rf "$WORKDIR"
+firet PreToolUse "$A" AskUserQuestion; ck "asks → ❓"           "❓enaia"
+fire  PreCompact "$A";                 ck "compact wins → ⏳"   "⏳enaia"
+fire  PostCompact "$A";                ck "after compact, still waiting → ❓" "❓enaia"
+
+echo "I: restart wiped \$TMPDIR but title kept ❓ → SessionStart sweep strips it"
+rm -rf "$WORKDIR"; printf '❓orphan' > "$ROOT/.title"
+fire SessionStart "$A"; ck "orphan ❓ (no live session) stripped → idle" "orphan"
+
+echo "J: two agents — A asks, B works → ❓ until A answers"
+printf 'multi' > "$ROOT/.title"; rm -rf "$WORKDIR"
+fire  PreToolUse "$A";                  ck "A works → ⚡"                  "⚡multi"
+fire  PreToolUse "$PID2";               ck "B works → ⚡"                  "⚡multi"
+firet PreToolUse "$A" AskUserQuestion;  ck "A asks → ❓ (outranks B work)" "❓multi"
+fire  PreToolUse "$PID2";               ck "B works on, A still waiting → ❓" "❓multi"
+fire  PreToolUse "$A";                  ck "A answered → ⚡ (B alive)"     "⚡multi"
+fire  Stop "$A"; fire Stop "$PID2";     ck "both stop → idle"             "multi"
 
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

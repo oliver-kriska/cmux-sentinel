@@ -10,16 +10,25 @@
 #
 #   ⚡  working    — an agent is mid-turn
 #   ⏳  compacting — an agent is compacting its context (PreCompact→PostCompact)
+#   ❓  waiting    — an agent is BLOCKED on you (asked a question / needs a
+#                   permission) and isn't actually running right now
 #
-# Compacting takes precedence over working (it's a busy sub-state). The marker is
-# STATIC by design: an animated/spinner glyph in the title floods cmux's title
-# coalescer and freezes the sidebar (upstream #6291). cmux trims a leading
-# zero-width space, so the marker is visible — it shows in cmux's tab bar too.
+# Precedence: compacting > waiting > working. Waiting outranks working because a
+# session that asked AskUserQuestion / ExitPlanMode (or hit a MID-TURN permission
+# Notification) is alive but parked on YOU — showing it as "Working…" would hide
+# that it needs an answer. (The idle "waiting for input" Notification that fires
+# ~60s AFTER a turn ends is gated out — see _notify_waiting — so a finished
+# workspace never flips to ❓.) Compacting still wins (it's a transient busy state).
+# The marker is STATIC by design: an animated/spinner glyph in the title floods
+# cmux's title coalescer and freezes the sidebar (upstream #6291). cmux trims a
+# leading zero-width space, so the marker is visible — it shows in cmux's tab bar
+# too. All three are single Unicode scalars so .hasPrefix/.split stay safe.
 #
 # MULTIPLE AGENTS per workspace are REFERENCE-COUNTED via per-workspace state
 # files under $WORKROOT/<workspace_id>/:
 #   <pid>              — a live working session (touched each turn)
 #   .compacting.<pid>  — that session is compacting right now
+#   .waiting.<pid>     — that session is blocked on the user right now
 #   .marked            — fast-path flag: title already carries the ⚡ work marker
 # Dead sessions are reaped by PID liveness (kill -0), so a crashed/zombie agent
 # can't strand a marker. One agent's Stop never clears another's. Codex can reuse
@@ -37,6 +46,7 @@ event="${1:-$(echo "$input" | jq -r '.hook_event_name // "unknown"')}"
 
 WORKMARK="⚡"
 COMPMARK="⏳"
+WAITMARK="❓"
 WORKROOT="${TMPDIR:-/tmp}/cmux-sentinel-work"
 
 _ws()    { printf '%s' "${CMUX_WORKSPACE_ID:-}"; }
@@ -64,6 +74,7 @@ _strip_marks() {
   local t="$1"
   t="${t#"$WORKMARK"}"
   t="${t#"$COMPMARK"}"
+  t="${t#"$WAITMARK"}"
   printf '%s' "$t"
 }
 
@@ -76,14 +87,19 @@ _title_of() {
 }
 
 # Desired marker for a workspace dir, reaping dead PIDs as a side effect.
-# Precedence: compacting > working > none.
+# Precedence: compacting > waiting > working > none.
 _desired_mark() {
-  local dir="$1" f pid live=0 comp=0
+  local dir="$1" f pid live=0 comp=0 wait=0
   [ -d "$dir" ] || { printf ''; return 0; }
   for f in "$dir"/.compacting.*; do
     [ -e "$f" ] || continue
     pid="${f##*.compacting.}"
     if _alive "$pid"; then comp=1; else rm -f "$f"; fi
+  done
+  for f in "$dir"/.waiting.*; do
+    [ -e "$f" ] || continue
+    pid="${f##*.waiting.}"
+    if _alive "$pid"; then wait=1; else rm -f "$f"; fi
   done
   for f in "$dir"/*; do # non-dotfiles only → working session pids
     [ -e "$f" ] || continue
@@ -91,6 +107,7 @@ _desired_mark() {
     if _alive "$pid"; then live=1; else rm -f "$f"; fi
   done
   if [ "$comp" = 1 ]; then printf '%s' "$COMPMARK"
+  elif [ "$wait" = 1 ]; then printf '%s' "$WAITMARK"
   elif [ "$live" = 1 ]; then printf '%s' "$WORKMARK"
   else printf ''; fi
 }
@@ -112,17 +129,53 @@ _reconcile_ws() {
 }
 
 # Mark THIS session working (hot path: the .marked flag skips the title read on
-# every turn after the first). Never overrides a compacting marker.
+# every turn after the first). Never overrides a compacting marker. Also clears
+# this session's waiting flag — a fresh prompt or a (non-question) tool call means
+# the user already responded, so we're running again.
 _set_working() {
   local ws sess dir t; ws=$(_ws); [ -n "$ws" ] || return 0
   sess=$(_sess); dir="$WORKROOT/$ws"
   mkdir -p "$dir" 2>/dev/null; : > "$dir/$sess"
+  rm -f "$dir/.waiting.$sess"                           # this session resumed → not waiting
   _marked_fresh "$dir" && return 0                     # hot path: trust a fresh flag
   t=$(_title_of "$ws"); [ -n "$t" ] || return 0
   case "$t" in "$COMPMARK"*) return 0 ;; esac          # compacting wins; recorded the pid
   case "$t" in "$WORKMARK"*) : > "$dir/.marked"; return 0 ;; esac
+  # Title still shows ❓: don't downgrade a co-tenant agent that's STILL blocked —
+  # only claim ⚡ once no live waiting session remains (cold path; re-derive).
+  case "$t" in "$WAITMARK"*) [ "$(_desired_mark "$dir")" = "$WAITMARK" ] && return 0 ;; esac
   cmux rename-workspace --workspace "$ws" "${WORKMARK}$(_strip_marks "$t")" &>/dev/null
   : > "$dir/.marked"
+}
+
+# Mark THIS session waiting-on-you (asked a question / needs a permission): swap
+# ⚡→❓. The session stays alive (its pid file remains) but is BLOCKED, so waiting
+# outranks working until the user responds. Compacting still wins. No .marked
+# fast-path: waiting is rare and self-heals via _set_working/_reconcile_ws.
+_set_waiting() {
+  local ws sess dir t; ws=$(_ws); [ -n "$ws" ] || return 0
+  sess=$(_sess); dir="$WORKROOT/$ws"
+  mkdir -p "$dir" 2>/dev/null
+  : > "$dir/$sess"                                      # session is alive…
+  : > "$dir/.waiting.$sess"                             # …but parked on the user
+  rm -f "$dir/.marked"                                  # ⚡ fast-path no longer valid
+  t=$(_title_of "$ws"); [ -n "$t" ] || return 0
+  case "$t" in "$COMPMARK"* | "$WAITMARK"*) return 0 ;; esac  # compacting wins; already waiting
+  cmux rename-workspace --workspace "$ws" "${WAITMARK}$(_strip_marks "$t")" &>/dev/null
+}
+
+# Notification-gated waiting. The Notification hook fires for TWO unrelated things:
+# a MID-TURN permission prompt (genuinely blocked → asking) AND the idle "waiting
+# for your input" notice that arrives ~60s AFTER Claude already finished (Stop
+# cleared the session → idle). Only the former is "asking", so flip to ❓ ONLY when
+# a live turn is in flight — i.e. this session still has its working pid file
+# (created on UserPromptSubmit/PreToolUse, removed by Stop). Without this gate, a
+# finished/idle workspace wrongly flips to ❓ a minute after it's done.
+_notify_waiting() {
+  local ws sess; ws=$(_ws); [ -n "$ws" ] || return 0
+  sess=$(_sess)
+  [ -f "$WORKROOT/$ws/$sess" ] || return 0   # session already stopped → idle notice, ignore
+  _set_waiting
 }
 
 # Mark THIS session compacting (swap ⚡→⏳; survives PostCompact via reconcile).
@@ -144,10 +197,11 @@ _clear_compacting() {
   _reconcile_ws "$ws"
 }
 
-# This session stopped → drop it and re-derive the workspace's marker.
+# This session stopped → drop it (and any waiting flag) and re-derive the marker.
 _clear_working() {
-  local ws; ws=$(_ws); [ -n "$ws" ] || return 0
-  rm -f "$WORKROOT/$ws/$(_sess)" "$WORKROOT/$ws/.marked" 2>/dev/null
+  local ws sess; ws=$(_ws); [ -n "$ws" ] || return 0
+  sess=$(_sess)
+  rm -f "$WORKROOT/$ws/$sess" "$WORKROOT/$ws/.waiting.$sess" "$WORKROOT/$ws/.marked" 2>/dev/null
   _reconcile_ws "$ws"
 }
 
@@ -166,11 +220,11 @@ _reconcile_all() {
 _sweep_orphan_marks() {
   local line id t
   cmux list-workspaces --id-format uuids 2>/dev/null | while IFS= read -r line; do
-    case "$line" in *"$WORKMARK"* | *"$COMPMARK"*) : ;; *) continue ;; esac
+    case "$line" in *"$WORKMARK"* | *"$COMPMARK"* | *"$WAITMARK"*) : ;; *) continue ;; esac
     id=$(printf '%s' "$line" | grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' | head -1)
     [ -n "$id" ] || continue
     t=$(printf '%s' "$line" | sed -E "s/^.*${id}[[:space:]]+//; s/[[:space:]]*\[selected\]\$//")
-    case "$t" in "$WORKMARK"* | "$COMPMARK"*) : ;; *) continue ;; esac
+    case "$t" in "$WORKMARK"* | "$COMPMARK"* | "$WAITMARK"*) : ;; *) continue ;; esac
     [ -n "$(_desired_mark "$WORKROOT/$id")" ] && continue # has a live session → keep
     cmux rename-workspace --workspace "$id" "$(_strip_marks "$t")" &>/dev/null
     rm -rf "${WORKROOT:?}/$id" 2>/dev/null
@@ -186,7 +240,15 @@ case "$event" in
     ;;
 
   UserPromptSubmit) _set_working ;;
-  PreToolUse)       _set_working ;;
+  PreToolUse)
+    # AskUserQuestion / ExitPlanMode block on the user the moment they're invoked,
+    # so flip straight to ❓ instead of ⚡. Every other tool is real work.
+    tool=$(echo "$input" | jq -r '.tool_name // ""')
+    case "$tool" in
+      AskUserQuestion | ExitPlanMode) _set_waiting ;;
+      *) _set_working ;;
+    esac
+    ;;
 
   PreCompact)
     _set_compacting
@@ -215,8 +277,12 @@ case "$event" in
     ;;
 
   Notification)
-    # Mid-turn wait (permission/idle prompt) — Claude is still working, so KEEP the
-    # marker; only surface the OS notification.
+    # MID-TURN block (a permission prompt) → flip to ❓ so the row stops claiming
+    # "Working…". The idle "waiting for your input" notice that fires after Claude
+    # has already finished is gated out by _notify_waiting (no live turn). Either
+    # way, surface the OS notification. Known minor lag: a permission prompt
+    # approved into a long-running tool keeps ❓ until that tool's next hook fires.
+    _notify_waiting
     title=$(echo "$input" | jq -r '.title // "Claude Code"')
     message=$(echo "$input" | jq -r '.message // ""' | head -c 120)
     cmux notify --title "$title" --body "$message" &>/dev/null

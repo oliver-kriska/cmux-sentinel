@@ -9,7 +9,8 @@ workspaces list with live agent states and pluggable **AI usage meters**.
 
 The top **USAGE** panel shows live Claude limits (5h session + 7d weekly) with smooth sub-cell
 bars — a 🟡/🔴 dot appears only when a limit gets close — and workspace rows light up by agent
-state: **purple** (compacting) / **green** (working) / **orange** (needs you) / dim (idle).
+state: **purple** (compacting) / **green** (working) / **orange** (needs you — including when an
+agent asks a question or hits a permission prompt) / dim (idle).
 
 It's a vibe-coded [custom sidebar](https://cmux.com/docs/custom-sidebars) (beta) plus small
 background pollers. Batteries included, easy to fork and tweak.
@@ -18,9 +19,9 @@ background pollers. Batteries included, easy to fork and tweak.
 
 - **Flat workspace list** in your manual order, SF Mono, Ayu-Mirage palette.
 - **Live agent row states** (via a Claude Code hooks bridge): `compacting` (purple), `working`
-  (green), `needs you` (orange, unread), `idle` (dim) — shown by row colour with a two-line
-  subtitle that keeps agent activity separate from repo state (branch · dirty · PR). The header
-  shows live per-state counts.
+  (green), `needs you` (orange — unread, or the agent asked a question / hit a permission prompt),
+  `idle` (dim) — shown by row colour with a two-line subtitle that keeps agent activity separate
+  from repo state (branch · dirty · PR). The header shows live per-state counts.
 - **Inline actions**: click to select, `×` to close, unread badges.
 - **Usage meters** — a top panel of live progress bars fed by background pollers. Ships with a
   **Claude Code** provider (rolling 5-hour session + 7-day weekly), with a smooth sub-cell
@@ -40,9 +41,11 @@ fixed set of per-workspace fields — it **cannot** fetch URLs or read arbitrary
 mechanisms feed it:
 
 1. **Agent row states** — Claude Code hooks → `hooks/cmux-bridge.sh` → a STATIC marker on the
-   *active* workspace's **title** (`⚡` working, `⏳` compacting), reference-counted so multiple
-   agents in one workspace don't stomp it and dead sessions can't strand it. The sidebar detects
-   the marker, colours the row, and strips the glyph for display. (Why the title and not
+   *active* workspace's **title** (`⚡` working, `⏳` compacting, `❓` waiting-on-you — an agent that
+   asked a question or hit a permission prompt), reference-counted so multiple agents in one
+   workspace don't stomp it and dead sessions can't strand it. Precedence is compacting > waiting >
+   working. The sidebar detects the marker, colours the row, and strips the glyph for display.
+   (Why the title and not
    `set-progress`: progress doesn't reach custom-sidebar data on this build — see gotchas — and
    the marker must be *static*, since an animated one freezes cmux's sidebar.)
 2. **Usage meters** — a poller (run by launchd every few minutes) computes each metric and writes
@@ -187,7 +190,7 @@ guide that complements cmux's official [authoring reference](https://cmux.com/do
 bin/cmux-claude-usage.sh     Claude usage poller (--print | --raw | --update)
 bin/cmux-sentinel-doctor.sh  read-only health-check of the whole pipeline
 sidebars/workspaces.swift    the sidebar (the opinionated design + USAGE panel)
-hooks/cmux-bridge.sh         Claude Code → cmux agent-state bridge (⚡ working / ⏳ compacting)
+hooks/cmux-bridge.sh         Claude Code → cmux agent-state bridge (⚡ working / ⏳ compacting / ❓ waiting-on-you)
 tests/bridge-state.sh        offline bridge state-machine test (stubs cmux; `make test`)
 examples/                    usage-sentinels.env + launchd plist templates
 install.sh                   file placement + next-steps

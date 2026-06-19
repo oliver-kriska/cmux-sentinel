@@ -5,9 +5,13 @@
 //
 // State is modeled as TWO INDEPENDENT dimensions, each on its own row:
 //   1. Agent activity — compacting (purple) / working (green) / needs-you
-//      (orange) / idle (dim). Compacting & working are read from STATIC markers
-//      the bridge keeps at the FRONT of the TITLE ("⏳"=compacting, "⚡"=working);
-//      needs-you from `unread`. Precedence: compacting > working > needs-you > idle.
+//      (orange) / idle (dim). Compacting, waiting & working are read from STATIC
+//      markers the bridge keeps at the FRONT of the TITLE ("⏳"=compacting,
+//      "❓"=waiting-on-you, "⚡"=working); needs-you ALSO triggers on `unread`.
+//      Precedence: compacting > waiting > working > needs-you(unread) > idle.
+//      "Waiting" is the bridge's way of saying Claude asked a question / hit a
+//      permission prompt — the row shows the orange needs-you treatment, not
+//      green "Working…", because the session is parked on YOU.
 //      (Why the title and not `progress`: cmux does NOT pass progress/description/
 //      color to custom-sidebar data on this build — proven by probe. Why STATIC:
 //      an animated marker in the title freezes cmux's sidebar — upstream #6291.
@@ -47,9 +51,20 @@ func isWorking(_ w) -> Bool {
 func isCompacting(_ w) -> Bool {
   return w.title.hasPrefix("⏳")
 }
+// Waiting: the bridge flips the marker to "❓" when Claude is BLOCKED on you —
+// it asked a question (AskUserQuestion / ExitPlanMode) or hit a permission/idle
+// prompt. The session is alive but parked, so this beats "working" and rides the
+// orange needs-you treatment. Markers are mutually exclusive (one leading glyph),
+// so isWaiting ⇒ !isWorking && !isCompacting.
+func isWaiting(_ w) -> Bool {
+  return w.title.hasPrefix("❓")
+}
+// needs-you = Claude is waiting on you (the ❓ marker) OR there are unread
+// messages while no agent is mid-turn. Working/compacting outrank a bare unread.
 func needsYou(_ w) -> Bool {
-  if isWorking(w) { return false }
   if isCompacting(w) { return false }
+  if isWaiting(w) { return true }
+  if isWorking(w) { return false }
   return w.unread > 0
 }
 // Show working by COLOR, not the glyph: strip the leading "⚡" marker from the
@@ -59,6 +74,11 @@ func needsYou(_ w) -> Bool {
 func displayTitle(_ w) -> String {
   if w.title.hasPrefix("⏳") {
     let parts = w.title.split(separator: "⏳")
+    if parts.count > 0 { return String(parts[0]) }
+    return ""
+  }
+  if w.title.hasPrefix("❓") {
+    let parts = w.title.split(separator: "❓")
     if parts.count > 0 { return String(parts[0]) }
     return ""
   }
@@ -75,6 +95,7 @@ func workLabel(_ w) -> String {
 }
 func activityText(_ w) -> String {
   if isCompacting(w) { return "Compacting…" }
+  if isWaiting(w) { return "asking…" }   // Claude asked a question / needs permission
   if isWorking(w) { return workLabel(w) }
   if needsYou(w) {
     if w.unread > 1 { return "needs you · \(w.unread)" }
