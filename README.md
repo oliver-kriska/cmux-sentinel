@@ -23,6 +23,10 @@ background pollers. Batteries included, easy to fork and tweak.
   `idle` (dim) — shown by row colour with a two-line subtitle that keeps agent activity separate
   from repo state (branch · dirty · PR). The header shows live per-state counts.
 - **Inline actions**: click to select, `×` to close, unread badges.
+- **Workspace-group names** (opt-in) — cmux gives custom sidebars no group data, so a group shows
+  its anchor's generic "Group 2" instead of its real name. A small background sync
+  (`GROUP_NAME_SYNC=1`) keeps each group's anchor title in step with the group name (see "Workspace
+  group names" below). Off by default; a no-op if you don't use groups.
 - **Usage meters** — a top panel of live progress bars fed by background pollers. Ships with two
   providers — **Claude Code** (rolling 5-hour session + 7-day weekly, via the OAuth usage endpoint)
   and **Codex** (the same two windows, read from local `~/.codex` rollout files — no token, no
@@ -289,6 +293,34 @@ Keychain each run; never stored or printed.
 
 ---
 
+## Workspace group names
+
+cmux **workspace groups** (collapsible groups in the sidebar) have a logical name, but a custom
+sidebar can't see it: cmux passes the interpreter **no group data at all** — no `groups` list, no
+per-workspace group field, nothing in `extension.sidebar.snapshot` (verified by probe). A group's
+header *is* its **anchor** workspace's row, and the anchor's `title` is a **separate field** from the
+group's name — they diverge the moment you rename the group. So the sidebar shows the anchor's
+generic **"Group 2"** instead of "Payduct".
+
+The fix uses the same title channel as everything else: **`bin/cmux-group-sync.sh`** reads
+`cmux workspace-group list` and renames each group's anchor workspace to the group's name. It
+preserves any `⚡`/`⏳` agent marker on the anchor and only writes when the name actually changed (so
+it doesn't churn cmux's title coalescer). It's **opt-in** and a no-op until you enable it:
+
+1. **Enable it:** set `GROUP_NAME_SYNC=1` in `~/.config/cmux/usage-sentinels.env`.
+2. **Try it (read-only):** `~/bin/cmux-group-sync.sh --list` shows each group, its anchor, and
+   whether a rename is pending; `--update` performs them.
+3. **Schedule it:** `install.sh` already deployed `~/Library/LaunchAgents/com.cmux-group-sync.plist`
+   (dormant). Load it: `launchctl bootstrap gui/$(id -u)
+   ~/Library/LaunchAgents/com.cmux-group-sync.plist`.
+
+It's multi-window aware (groups are window-scoped; launchd has no window context) and needs no
+credentials or network. `~/bin/cmux-sentinel-doctor.sh` reports whether it's enabled, loaded, and
+whether any anchors are out of sync. (If cmux ever exposes group data to the sidebar, this can
+retire — tracked in `.claude/research/2026-06-19-workspace-group-names-in-sidebar.md`.)
+
+---
+
 ## Interpreter gotchas
 
 The cmux sidebar runs a **subset** of SwiftUI. Hard-won facts (respect these in PRs):
@@ -321,6 +353,7 @@ guide that complements cmux's official [authoring reference](https://cmux.com/do
 bin/cmux-claude-usage.sh     Claude usage poller — OAuth usage endpoint (--print | --raw | --update)
 bin/cmux-codex-usage.sh      Codex usage poller — local ~/.codex rollout files (--print | --raw | --update)
 bin/cmux-sentinel-setup.sh   idempotently create the meter sentinel workspaces (+ auto-naming guard)
+bin/cmux-group-sync.sh       workspace-group name → anchor-title sync (opt-in; --list | --raw | --update)
 bin/cmux-sentinel-doctor.sh  read-only health-check of the whole pipeline (both providers + snapshot)
 sidebars/workspaces.swift    the sidebar (the opinionated design + USAGE panels)
 hooks/cmux-bridge.sh         Claude Code → cmux agent-state bridge (⚡ working / ⏳ compacting / ❓ waiting-on-you)
@@ -329,7 +362,8 @@ tests/poller-gate.sh         offline Claude poller gating + clamping + bare-labe
 tests/codex-poller.sh        offline Codex poller gating + rollout-parsing + clamping + multi-window
 tests/install-hooks.sh       offline install.sh hook-registration test
 tests/sentinel-setup.sh      offline cmux-sentinel-setup.sh test
-examples/                    usage-sentinels.env + launchd plist templates (Claude + Codex)
+tests/group-sync.sh          offline group-sync gating + rename + marker-preserve + multi-window
+examples/                    usage-sentinels.env + launchd plist templates (Claude + Codex + group-sync)
 install.sh                   file placement + next-steps
 ```
 

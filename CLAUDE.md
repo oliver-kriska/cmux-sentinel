@@ -47,6 +47,16 @@ break everything. Confirmed traps:
 - **No native value bar for meters.** `ProgressView(value:)` needs a numeric `progress`, which idle
   sentinels don't have — so meters are Unicode block text bars (`▏▎▍▌▋▊▉█`). Utilization **color**
   can't come from data either; it's a colored emoji in the title (🟡/🔴).
+- **Workspace-GROUP data NEVER reaches the sidebar interpreter** (probed 2026-06-19, see
+  `.claude/research/2026-06-19-workspace-group-names-in-sidebar.md`). There is no `groups` binding and
+  no per-workspace group field — referencing `groups` renders empty (the interpreter is lenient, it
+  does NOT blank), and `extension.sidebar.snapshot` carries no group fields either. A cmux group's
+  display name (`group.name`, via `cmux workspace-group list`) lives ONLY on the group object; the
+  group header IS its ANCHOR workspace's row, and the anchor's `title` does NOT track `group.name`
+  (they diverge on rename). So the sidebar shows the anchor's stale/generic "Group N". Same fix shape
+  as the meters: `bin/cmux-group-sync.sh` (opt-in `GROUP_NAME_SYNC=1`) renames each anchor's title to
+  `group.name` via the **title channel** (preserving any ⚡/⏳ marker, writing only on change). Don't
+  try to read group data in the sidebar — it isn't there.
 - **Greedy modifiers that wreck row height:** `Divider().background("#hex")`,
   `.frame(maxHeight: .infinity)`, `.overlay { Rectangle().frame(height:1) }`. Use plain `Divider()` +
   a single `.padding(n)`. `.contentShape(Rectangle())` is a no-op. Custom fonts aren't honored —
@@ -70,9 +80,11 @@ cmux sidebar validate workspaces && cmux sidebar reload   # validate only PARSES
 ./bin/cmux-codex-usage.sh --print      # Codex: latest local rate_limits snapshot
 ./bin/cmux-codex-usage.sh --raw        # raw rate_limits JSON from ~/.codex rollout
 ./bin/cmux-codex-usage.sh --update     # renames cx5h/cx7d (needs USAGE_PROVIDERS to list codex)
+./bin/cmux-group-sync.sh --list        # workspace-GROUP names: which anchors are out of sync (read-only)
+./bin/cmux-group-sync.sh --update      # rename group anchors to the group name (needs GROUP_NAME_SYNC=1)
 
 # offline tests (stub cmux/security/curl/$HOME — run in CI too)
-make test   # bridge-state(36) poller-gate(18) codex-poller(20) install-hooks(8) sentinel-setup(14)
+make test   # bridge-state(36) poller-gate(18) codex-poller(20) install-hooks(8) sentinel-setup(14) group-sync(20)
 ```
 
 ## Architecture / where things live
@@ -82,9 +94,10 @@ sidebars/workspaces.swift  the sidebar. isClaudeMeter()/isCodexMeter() = title-l
 bin/cmux-claude-usage.sh    Claude usage poller. make_bar / sev_dot / mark_offline / bucket_field / to_pct / resolve_ref(+_paint, multi-window).
 bin/cmux-codex-usage.sh     Codex usage poller (local ~/.codex rollout). latest_snapshot / make_bar / sev_dot / mark_stale / to_pct / resolve_ref(+_paint).
 bin/cmux-sentinel-setup.sh  idempotent sentinel creation (per USAGE_PROVIDERS) + auto-naming guard probe.
+bin/cmux-group-sync.sh      workspace-GROUP name → anchor-title sync (opt-in GROUP_NAME_SYNC). split-marker / multi-window / --list|--raw|--update.
 hooks/cmux-bridge.sh        Claude Code → cmux agent-state bridge (⚡ working / ⏳ compacting / ❓ waiting-on-you rows).
-tests/                      bridge-state + poller-gate + codex-poller + install-hooks + sentinel-setup. `make test`.
-examples/                   usage-sentinels.env + launchd plist templates (com.cmux-claude-usage / com.cmux-codex-usage).
+tests/                      bridge-state + poller-gate + codex-poller + install-hooks + sentinel-setup + group-sync. `make test`.
+examples/                   usage-sentinels.env + launchd plist templates (com.cmux-claude-usage / com.cmux-codex-usage / com.cmux-group-sync).
 ```
 
 - **Agent state rides STATIC title markers** the bridge keeps at the FRONT of the title — `⚡` =

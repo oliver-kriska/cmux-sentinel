@@ -92,6 +92,8 @@ install -m 0755 "$here/bin/cmux-sentinel-doctor.sh" "$HOME/bin/cmux-sentinel-doc
 echo "  -> ~/bin/cmux-sentinel-doctor.sh  (run anytime to health-check the setup)"
 install -m 0755 "$here/bin/cmux-sentinel-setup.sh" "$HOME/bin/cmux-sentinel-setup.sh"
 echo "  -> ~/bin/cmux-sentinel-setup.sh  (creates the meter sentinel workspaces for you)"
+install -m 0755 "$here/bin/cmux-group-sync.sh" "$HOME/bin/cmux-group-sync.sh"
+echo "  -> ~/bin/cmux-group-sync.sh  (opt-in: show workspace-GROUP names in the sidebar; set GROUP_NAME_SYNC=1)"
 
 # 2. sidebar
 bak "$cfg/sidebars/workspaces.swift"
@@ -117,6 +119,10 @@ cxplist="$HOME/Library/LaunchAgents/com.cmux-codex-usage.plist"
 bak "$cxplist"
 sed "s#/Users/YOUR_USERNAME#$HOME#g" "$here/examples/com.cmux-codex-usage.plist" > "$cxplist"
 echo "  -> $cxplist  (dormant — bootstrap it only if you enable Codex)"
+gsplist="$HOME/Library/LaunchAgents/com.cmux-group-sync.plist"
+bak "$gsplist"
+sed "s#/Users/YOUR_USERNAME#$HOME#g" "$here/examples/com.cmux-group-sync.plist" > "$gsplist"
+echo "  -> $gsplist  (dormant — bootstrap it only if you set GROUP_NAME_SYNC=1)"
 
 # 5. working-state hooks bridge. Install when explicitly requested (WITH_BRIDGE=1)
 #    OR when one is already present — so a plain re-run still UPDATES an existing
@@ -166,6 +172,12 @@ cat <<'NEXT'
 (Working-state rows — ⚡ working / ⏳ compacting / ❓ waiting-on-you: run
  WITH_BRIDGE=1 ./install.sh  — it installs the bridge AND auto-wires the hooks into
  ~/.claude/settings.json. Then RESTART Claude Code so the new hook events register.)
+
+(Workspace-GROUP names — if you use cmux workspace groups, the sidebar shows the
+ anchor's generic "Group 2" instead of the group's name (cmux gives custom sidebars
+ no group data). To fix: set GROUP_NAME_SYNC=1 in ~/.config/cmux/usage-sentinels.env,
+ try it with `~/bin/cmux-group-sync.sh --list`, then start it:
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cmux-group-sync.plist )
 
 To UPDATE later: re-run this installer (curl one-liner or `git pull && ./install.sh`), then
 `cmux sidebar reload`. An already-installed bridge refreshes automatically — no flag needed.

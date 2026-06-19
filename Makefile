@@ -10,9 +10,10 @@
 
 SHELL   := bash
 SCRIPTS := bin/cmux-claude-usage.sh bin/cmux-codex-usage.sh bin/cmux-sentinel-doctor.sh \
-           bin/cmux-sentinel-setup.sh hooks/cmux-bridge.sh install.sh scripts/check-secrets.sh \
+           bin/cmux-sentinel-setup.sh bin/cmux-group-sync.sh hooks/cmux-bridge.sh \
+           install.sh scripts/check-secrets.sh \
            tests/bridge-state.sh tests/poller-gate.sh tests/codex-poller.sh \
-           tests/install-hooks.sh tests/sentinel-setup.sh
+           tests/install-hooks.sh tests/sentinel-setup.sh tests/group-sync.sh
 MD      := $(wildcard *.md) $(wildcard docs/*.md)
 
 .PHONY: help check ci lint shellcheck secrets markdown test doctor sidebar fmt fmt-check
@@ -43,12 +44,14 @@ markdown:
 #   codex-poller  — Codex usage-poller gating + rollout snapshot parsing + clamping
 #   install-hooks  — install.sh Claude-hook auto-registration (merge / preserve / idempotent / no-jq)
 #   sentinel-setup — cmux-sentinel-setup.sh idempotent sentinel creation + auto-naming guard
+#   group-sync     — cmux-group-sync.sh group-name → anchor-title sync (gate / rename / marker / multi-window)
 test:
 	bash tests/bridge-state.sh
 	bash tests/poller-gate.sh
 	bash tests/codex-poller.sh
 	bash tests/install-hooks.sh
 	bash tests/sentinel-setup.sh
+	bash tests/group-sync.sh
 
 # health-check the live setup (read-only) — bridge/hooks/launchd/automation/sentinels.
 doctor:

@@ -175,6 +175,44 @@ else
   note "cmux or jq unavailable — skipping snapshot check"
 fi
 
+# Workspace-group names (opt-in). cmux passes custom sidebars NO group data, so a
+# group renders its anchor workspace's title (often a generic "Group N") instead of
+# the group name. cmux-group-sync.sh keeps anchor titles in sync when
+# GROUP_NAME_SYNC=1. This cross-checks groups-present × enabled × in-sync and only
+# nags when something is actually off. See
+# .claude/research/2026-06-19-workspace-group-names-in-sidebar.md.
+echo "• workspace-group names (opt-in)"
+gsync="${GROUP_NAME_SYNC:-0}"
+if have cmux && have jq; then
+  ngroups=0; ndiverged=0
+  while IFS= read -r w; do
+    [ -n "$w" ] || continue
+    while IFS=$'\t' read -r gname ganchor; do
+      [ -n "$gname" ] && [ -n "$ganchor" ] || continue
+      ngroups=$((ngroups + 1))
+      gtitle="$(cmux workspace list --window "$w" --json 2>/dev/null \
+        | jq -r --arg r "$ganchor" '.workspaces[] | select(.ref == $r) | .title' 2>/dev/null | head -1)"
+      gbase="$gtitle"
+      case "$gbase" in ⚡*) gbase="${gbase#⚡}" ;; ⏳*) gbase="${gbase#⏳}" ;; ❓*) gbase="${gbase#❓}" ;; esac
+      gbase="${gbase# }"
+      [ "$gbase" = "$gname" ] || ndiverged=$((ndiverged + 1))
+    done < <(cmux workspace-group list --window "$w" --json 2>/dev/null \
+      | jq -r '.groups[]? | select(.name != null and .name != "") | "\(.name)\t\(.anchor_workspace_ref)"' 2>/dev/null)
+  done < <(cmux list-windows --json 2>/dev/null | jq -r '.[].id // empty' 2>/dev/null)
+  if [ "$ngroups" = 0 ]; then
+    note "no workspace groups — nothing to sync"
+  elif [ "$gsync" = 1 ]; then
+    if launchctl list 2>/dev/null | grep -q com.cmux-group-sync; then ok "group-name sync ON, launchd loaded ($ngroups group(s))"
+    else warn "GROUP_NAME_SYNC=1 but launchd job not loaded — launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/com.cmux-group-sync.plist"; fi
+    if [ "$ndiverged" = 0 ]; then ok "all $ngroups anchor title(s) match their group name"
+    else warn "$ndiverged of $ngroups group anchor(s) out of sync — run: ~/bin/cmux-group-sync.sh --update"; fi
+  else
+    warn "$ngroups workspace group(s) present but GROUP_NAME_SYNC is off — sidebar shows anchor titles, not group names (set GROUP_NAME_SYNC=1)"
+  fi
+else
+  note "cmux or jq unavailable — skipping group-name check"
+fi
+
 echo
 if [ "$fails" -gt 0 ]; then printf '\033[31m%d problem(s), %d warning(s).\033[0m\n' "$fails" "$warns"; exit 1
 elif [ "$warns" -gt 0 ]; then printf '\033[33mAll critical checks passed, %d warning(s).\033[0m\n' "$warns"; exit 0

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cmux-group-sync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOUR_USERNAME/bin/cmux-group-sync.sh</string>
+    <string>--update</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Applications/cmux.app/Contents/Resources/bin</string>
+    <key>HOME</key>
+    <string>/Users/YOUR_USERNAME</string>
+    <key>CMUX_SOCKET_PATH</key>
+    <string>/Users/YOUR_USERNAME/.local/state/cmux/cmux.sock</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/tmp/cmux-group-sync.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/cmux-group-sync.err</string>
+</dict>
+</plist>
