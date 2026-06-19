@@ -10,7 +10,7 @@
 
 SHELL   := bash
 SCRIPTS := bin/cmux-claude-usage.sh bin/cmux-sentinel-doctor.sh hooks/cmux-bridge.sh \
-           install.sh scripts/check-secrets.sh tests/bridge-state.sh
+           install.sh scripts/check-secrets.sh tests/bridge-state.sh tests/poller-gate.sh
 MD      := $(wildcard *.md) $(wildcard docs/*.md)
 
 .PHONY: help check ci lint shellcheck secrets markdown test doctor sidebar fmt fmt-check
@@ -18,7 +18,7 @@ MD      := $(wildcard *.md) $(wildcard docs/*.md)
 help:
 	@echo "make check   — shellcheck + secrets + markdown + test + sidebar (full local gate)"
 	@echo "make ci      — what CI runs (check minus sidebar; no cmux on the runner)"
-	@echo "make test    — offline bridge state-machine test (stubs cmux)"
+	@echo "make test    — offline state-machine tests: bridge markers + poller gating (stubs cmux)"
 	@echo "make doctor  — health-check the live setup (read-only)"
 	@echo "make fmt     — reformat shell scripts with shfmt (opt-in, not a gate)"
 
@@ -35,9 +35,12 @@ secrets:
 markdown:
 	markdownlint $(MD)
 
-# bridge state machine: offline, stubs cmux, runs on Linux CI too.
+# state machines: offline, stub cmux/security/curl, run on Linux CI too.
+#   bridge-state — agent activity markers (⚡/⏳/❓)
+#   poller-gate  — usage-poller provider gating (disabled / not-installed / offline / ok)
 test:
 	bash tests/bridge-state.sh
+	bash tests/poller-gate.sh
 
 # health-check the live setup (read-only) — bridge/hooks/launchd/automation/sentinels.
 doctor:

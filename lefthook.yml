@@ -18,9 +18,10 @@ pre-commit:
     markdown:
       glob: "*.md"
       run: make markdown
-    # Run the offline bridge state-machine test when the bridge or test changes.
+    # Run the offline state-machine tests (bridge markers + poller gating) when
+    # the bridge, the poller, or any test changes.
     test:
-      glob: "{hooks/cmux-bridge.sh,tests/bridge-state.sh}"
+      glob: "{hooks/cmux-bridge.sh,bin/cmux-claude-usage.sh,tests/*.sh}"
       run: make test
     # Parse-check the sidebar when it changes (only if cmux is installed).
     sidebar:

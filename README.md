@@ -130,15 +130,40 @@ Then `cmux sidebar reload` to repaint. Notes:
 
 Each provider gets its **own labelled section** in the panel — `CLAUDE USAGE` now, `CODEX USAGE`
 later — the same component reused. A meter is just an idle "sentinel" workspace whose **title** a
-poller keeps updated. To **add a provider** (e.g. Codex):
+poller keeps updated.
+
+### Choosing which providers show (and never crashing on a missing one)
+
+The sidebar can't read a config file — it can only react to workspace data — so **which providers
+show is decided by which sentinels exist**, and the sidebar **auto-hides any provider with zero
+sentinels** (each panel is guarded by a `count > 0`). That makes provider selection a setup choice,
+not a sidebar edit, and gives three robustness guarantees:
+
+- **A provider you don't use never appears.** No Codex poller + no Codex sentinels ⇒ no Codex panel.
+  (So an out-of-the-box install is **Claude-only** — exactly what most people want.)
+- **An *uninstalled* provider can't break anything.** Each poller **self-gates**: if its provider
+  isn't installed here (e.g. no Claude credentials in the Keychain *or* `~/.claude/.credentials.json`)
+  it **exits 0 silently** — no launchd error spam, no stale "offline" panel. The sidebar itself only
+  ever reads titles, so it can't crash on a missing CLI either. An *expired* token is different — the
+  creds still exist, so it's treated as a transient `⚠ offline` rather than "not installed".
+- **You can disable a provider you *do* have installed.** Set `USAGE_PROVIDERS` in
+  `~/.config/cmux/usage-sentinels.env` (space-separated; default `claude`). Drop a name to make that
+  poller a no-op without unloading launchd; then `cmux workspace close` its sentinels to remove the
+  panel. `~/bin/cmux-sentinel-doctor.sh` reports installed × enabled × sentinel-present and flags any
+  leftover panel.
+
+### Add a provider (e.g. Codex)
 
 1. Create a sentinel workspace and give it a distinct label (e.g. title starting with `cx`). In
    `sidebars/workspaces.swift`: add an `isCodexMeter(w)` predicate (copy `isClaudeMeter`, swap the
    `hasPrefix` label), add `if isCodexMeter(w) { return true }` to `isUsageMeter`, and
    uncomment/duplicate the `CODEX USAGE` section in the panel.
-2. Write a small poller (copy `bin/cmux-claude-usage.sh`) that fetches the provider's usage and
-   does `cmux rename-workspace --workspace <uuid> "<label> <bar> <pct>% <reset>"`.
-3. Schedule it (launchd) like the Claude one.
+2. Write a small poller (copy `bin/cmux-claude-usage.sh`) — keep the self-gating pattern: a
+   `provider_available()` (detect the provider's creds/CLI) + a `PROVIDER_ID` checked against
+   `USAGE_PROVIDERS`, so it exits cleanly when Codex is absent or disabled. It fetches usage and does
+   `cmux rename-workspace --workspace <ref> "<label> <bar> <pct>% <reset>"`.
+3. Schedule it (launchd) like the Claude one. Users who want it run its poller; users who don't,
+   don't — nothing else to configure.
 
 PRs adding providers are very welcome.
 
