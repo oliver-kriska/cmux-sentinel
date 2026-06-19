@@ -64,21 +64,47 @@ if [ -f "$CFG/cmux.json" ]; then
   else warn "cmux.json has no socketControlMode: automation — auto-refresh renames may be rejected"; fi
 else warn "no ~/.config/cmux/cmux.json — can't confirm automation mode"; fi
 
-# Sentinels are now resolved by TITLE LABEL, not a stored id (cmux 0.64.15
-# dropped stable workspace UUIDs — see the poller's resolve_ref). So the check is
-# "does a workspace whose title starts with the label exist", which is exactly
-# what the poller and sidebar both key on. Labels are overridable via the env.
-echo "• usage sentinels"
+# Usage meters are provider-gated: a provider's panel shows IFF its sentinels
+# exist, the poller only maintains them when the provider is installed + enabled
+# (USAGE_PROVIDERS), and the sidebar hides any provider with no sentinels. So this
+# section cross-checks installed × enabled × sentinel-present and flags only the
+# states that are actually wrong (e.g. a leftover panel for an uninstalled
+# provider). Sentinels are resolved by TITLE LABEL (cmux 0.64.15 dropped stable
+# UUIDs — see the poller's resolve_ref); labels + provider set are env-overridable.
+echo "• usage meters (providers)"
 envf="$CFG/usage-sentinels.env"
 # shellcheck disable=SC1090
 [ -f "$envf" ] && . "$envf"
 lbl5="${SENTINEL_5H_LABEL:-5h}"; lbl7="${SENTINEL_7D_LABEL:-7d}"
+providers="${USAGE_PROVIDERS:-claude}"
+
+claude_installed() {
+  security find-generic-password -s "Claude Code-credentials" -w &>/dev/null && return 0
+  [ -f "$HOME/.claude/.credentials.json" ] && return 0
+  return 1
+}
+case " $providers " in *" claude "*) claude_on=1 ;; *) claude_on=0 ;; esac
+if claude_installed; then claude_inst=1; else claude_inst=0; fi
+
+if [ "$claude_on" = 1 ] && [ "$claude_inst" = 1 ]; then
+  ok "claude: installed + enabled → meters active"
+elif [ "$claude_on" = 1 ]; then
+  warn "claude: enabled but NOT installed here — poller exits cleanly, no panel (expected if you don't use Claude)"
+else
+  warn "claude: disabled via USAGE_PROVIDERS=\"$providers\" — poller skips it"
+fi
+
 if have cmux && have jq; then
   for lbl in "$lbl5" "$lbl7"; do
     ref="$(cmux workspace list --json 2>/dev/null \
       | jq -r --arg l "$lbl" '.workspaces[] | select(.title|startswith($l+" ")) | .ref' 2>/dev/null | head -1)"
-    if [ -n "$ref" ]; then ok "'$lbl' sentinel present ($ref)"
-    else warn "no '$lbl' sentinel workspace (title starting \"$lbl \") — create it (see install.sh)"; fi
+    if [ -n "$ref" ]; then
+      if [ "$claude_on" = 1 ] && [ "$claude_inst" = 1 ]; then ok "'$lbl' sentinel present ($ref)"
+      else warn "'$lbl' sentinel present ($ref) but claude is off/uninstalled — close it to hide the panel: cmux workspace close $ref"; fi
+    else
+      if [ "$claude_on" = 1 ] && [ "$claude_inst" = 1 ]; then warn "no '$lbl' sentinel (title starting \"$lbl \") — create it (see install.sh)"
+      else ok "no '$lbl' sentinel — panel hidden by design (claude off/uninstalled)"; fi
+    fi
   done
 else warn "cmux or jq unavailable — can't check sentinels"; fi
 

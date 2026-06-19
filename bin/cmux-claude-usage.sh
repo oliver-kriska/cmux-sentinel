@@ -30,8 +30,20 @@
 #   --raw       fetch + print raw JSON (token NOT included)
 #   --update    fetch + rename both sentinel workspaces with bars (for launchd)
 #
-# Labels (overridable): ~/.config/cmux/usage-sentinels.env
-#   (SENTINEL_5H_LABEL=5h, SENTINEL_7D_LABEL=7d)
+# Provider gating (which usage meters show, robustly): a provider's panel shows in
+# the sidebar IFF its sentinels exist, and the sidebar hides any provider with
+# none. This poller is the CLAUDE provider and SELF-GATES so an uninstalled or
+# disabled Claude never crashes, spams the launchd .err, or shows a broken panel:
+#   * disabled (USAGE_PROVIDERS doesn't list "claude") → exit 0, do nothing.
+#   * not installed (no Keychain item AND no ~/.claude/.credentials.json) → exit 0,
+#     do nothing. "Not installed" ≠ "token expired": an EXPIRED token (creds exist
+#     but the fetch fails) is a TRANSIENT state and still stamps "⚠ offline".
+# So adding/removing a provider = run/stop its poller + create/close its sentinels;
+# you never edit the sidebar. See examples/usage-sentinels.env.example.
+#
+# Config (overridable): ~/.config/cmux/usage-sentinels.env
+#   SENTINEL_5H_LABEL=5h   SENTINEL_7D_LABEL=7d
+#   USAGE_PROVIDERS="claude"   # space-separated; drop "claude" to disable this one
 
 set -uo pipefail
 
@@ -48,7 +60,28 @@ SENTINELS_ENV="$HOME/.config/cmux/usage-sentinels.env"
 LABEL_5H="${SENTINEL_5H_LABEL:-5h}"
 LABEL_7D="${SENTINEL_7D_LABEL:-7d}"
 
+# This poller's provider id and the enabled set. Default "claude" so it works
+# zero-config; drop "claude" from USAGE_PROVIDERS to disable it without touching
+# launchd (e.g. USAGE_PROVIDERS="codex").
+PROVIDER_ID="claude"
+USAGE_PROVIDERS="${USAGE_PROVIDERS:-claude}"
+
 die() { echo "ERR: $*" >&2; exit 1; }
+
+# Is THIS provider enabled in the configured set? (space-padded substring match)
+provider_enabled() {
+  case " $USAGE_PROVIDERS " in *" $PROVIDER_ID "*) return 0 ;; *) return 1 ;; esac
+}
+
+# Is Claude Code installed/logged in HERE? True iff a credential SOURCE exists
+# (Keychain item OR creds file) — regardless of whether the token is currently
+# valid. No source ⇒ Claude was never set up on this machine ⇒ nothing to meter
+# (distinct from an EXPIRED token, which is a transient 'offline').
+provider_available() {
+  security find-generic-password -s "$KEYCHAIN_SERVICE" -w &>/dev/null && return 0
+  [ -f "$HOME/.claude/.credentials.json" ] && return 0
+  return 1
+}
 
 # Resolve a sentinel's CURRENT ref by its title label. cmux dropped stable
 # workspace UUIDs (0.64.15), so refs (workspace:N) are the only handle — and they
@@ -158,6 +191,21 @@ bucket_field() { # $1=json $2=bucket_snake $3=bucket_camel $4=field_snake $5=fie
 
 main() {
   local mode="${1:---print}" token json
+
+  # Provider gate (robustness): never crash, error-spam, or leave a broken panel
+  # for a provider that's turned off or not installed. The sidebar hides a provider
+  # whose sentinels are absent, so a clean exit 0 here = no panel, no noise. An
+  # EXPIRED token is NOT caught here (creds still exist) — it falls through to the
+  # transient '⚠ offline' path below, which is the genuinely useful signal.
+  if ! provider_enabled; then
+    echo "claude disabled (USAGE_PROVIDERS=\"$USAGE_PROVIDERS\") — nothing to do" >&2
+    exit 0
+  fi
+  if ! provider_available; then
+    echo "Claude Code not installed here (no Keychain item / ~/.claude/.credentials.json) — nothing to meter" >&2
+    exit 0
+  fi
+
   token=$(read_token) || { [ "$mode" = "--update" ] && mark_offline "no token"; exit 1; }
   json=$(fetch_usage "$token") || {
     [ "$mode" = "--update" ] && mark_offline "offline"

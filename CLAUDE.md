@@ -88,6 +88,16 @@ examples/                   usage-sentinels.env + launchd plist templates.
   `isCodexMeter()` predicate + an `if isCodexMeter(w)` line to `isUsageMeter()` + a `CODEX USAGE`
   panel section, and copy the poller with a new data source. (Whether Codex exposes a usable usage
   endpoint is an open research question.)
+- **Provider selection is gated, not configured in the sidebar** (it can't read config — only
+  workspace data). A provider's panel shows IFF its sentinels exist, and the sidebar auto-hides any
+  provider with a zero `count`. So selection lives in setup: which pollers run + which sentinels
+  exist. Each poller **self-gates** — `provider_available()` (creds/CLI detection) + a `PROVIDER_ID`
+  checked against `USAGE_PROVIDERS` (env, default `claude`) — and **exits 0 silently** when its
+  provider is disabled or not installed (NOT installed ≠ expired token: an expired token still
+  carries creds, so it stays the transient `⚠ offline`). This is why a missing/uninstalled provider
+  never crashes or spams: keep that pattern when adding one. Gates are covered by
+  `tests/poller-gate.sh`; `bin/cmux-sentinel-doctor.sh` reports installed × enabled × sentinel.
+  Decision record: `.claude/research/2026-06-19-usage-provider-selection.md`.
 - **Auto-refresh** needs `"automation": { "socketControlMode": "automation" }` in `cmux.json`. On the
   current build `reload-config` applies this **live** (proven: an external launchd kick landed its
   renames with no restart) — the earlier "needs a full cmux restart" note was outdated. If external
