@@ -65,11 +65,38 @@ launchd ──► bin/cmux-claude-usage.sh --update
 
 ## Install
 
+### Install with your AI agent (recommended)
+
+Already running Claude Code, Codex, or Cursor? Paste this and let it do the whole setup —
+including the steps people skip by hand (wiring the Claude Code hooks and creating the usage
+sentinels):
+
+```text
+Install cmux-sentinel (a custom cmux sidebar + Claude-Code agent-state bridge +
+AI usage meters) on this Mac for me.
+
+Fetch this guide and follow it exactly, top to bottom:
+https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/docs/agent-install.md
+
+Rules:
+- It's idempotent and backs up anything it changes — do the file edits yourself
+  (e.g. merging the hooks block into ~/.claude/settings.json), don't ask me to.
+- When done, run ~/bin/cmux-sentinel-doctor.sh and show me the output. If a check
+  isn't green, fix it per the guide and re-run the doctor until it's clean.
+- Stop and ask me only if cmux isn't installed/running or Claude Code isn't logged in.
+- After registering hooks, remind me to fully restart Claude Code.
+```
+
+The agent follows [`docs/agent-install.md`](docs/agent-install.md) — read it first if you want
+to see exactly what it will run. Prefer to do it by hand? Use the manual steps below.
+
+### Manual install
+
 One-liner — clones to `~/.cache/cmux-sentinel` and runs the installer:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/install.sh | bash
-# also install the working-state hooks:
+# also install the working-state hooks AND auto-wire them into ~/.claude/settings.json:
 curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/install.sh | WITH_BRIDGE=1 bash
 ```
 
@@ -78,7 +105,7 @@ Or clone it yourself:
 ```bash
 git clone https://github.com/oliver-kriska/cmux-sentinel.git
 cd cmux-sentinel
-./install.sh                 # add WITH_BRIDGE=1 to also install the working-state hooks
+./install.sh                 # add WITH_BRIDGE=1 to also install + wire the working-state hooks
 ```
 
 `install.sh` copies the files into place (backing up anything it overwrites) and prints the
@@ -100,6 +127,37 @@ remaining manual steps. In short:
    `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cmux-claude-usage.plist`.
 6. **Verify the pipeline:** `make doctor` (or `~/bin/cmux-sentinel-doctor.sh`) — a read-only check
    that the bridge, hooks, launchd job, automation mode, and sentinels are all wired.
+
+### Working-state rows (the hooks bridge)
+
+`WITH_BRIDGE=1 ./install.sh` installs the bridge **and auto-wires** the Claude Code hook events
+into `~/.claude/settings.json` (idempotent, backed up) — then **restart Claude Code** so the new
+events register. Without the bridge, every row shows `idle`; with it you get `⚡ working` /
+`⏳ compacting` / `❓ waiting-on-you`.
+
+If the installer couldn't edit `settings.json` (no `jq`, or it wasn't valid JSON), add this under
+`"hooks"` by hand (keep any existing hooks; all entries are fire-and-forget), then restart Claude
+Code:
+
+```json
+{
+  "hooks": {
+    "SessionStart":       [{ "matcher": "", "hooks": [{ "type": "command", "command": "~/.claude/hooks/cmux-bridge.sh", "async": true }] }],
+    "UserPromptSubmit":   [{ "matcher": "", "hooks": [{ "type": "command", "command": "~/.claude/hooks/cmux-bridge.sh", "async": true }] }],
+    "PreToolUse":         [{ "matcher": "", "hooks": [{ "type": "command", "command": "~/.claude/hooks/cmux-bridge.sh", "async": true }] }],
+    "PreCompact":         [{ "matcher": "", "hooks": [{ "type": "command", "command": "~/.claude/hooks/cmux-bridge.sh", "async": true }] }],
+    "PostCompact":        [{ "matcher": "", "hooks": [{ "type": "command", "command": "~/.claude/hooks/cmux-bridge.sh", "async": true }] }],
+    "Stop":               [{ "matcher": "", "hooks": [{ "type": "command", "command": "~/.claude/hooks/cmux-bridge.sh", "async": true }] }],
+    "StopFailure":        [{ "matcher": "", "hooks": [{ "type": "command", "command": "~/.claude/hooks/cmux-bridge.sh", "async": true }] }],
+    "Notification":       [{ "matcher": "", "hooks": [{ "type": "command", "command": "~/.claude/hooks/cmux-bridge.sh", "async": true }] }],
+    "PostToolUseFailure": [{ "matcher": "", "hooks": [{ "type": "command", "command": "~/.claude/hooks/cmux-bridge.sh", "async": true }] }],
+    "SessionEnd":         [{ "matcher": "", "hooks": [{ "type": "command", "command": "~/.claude/hooks/cmux-bridge.sh", "async": true }] }]
+  }
+}
+```
+
+`Notification` drives `❓ waiting-on-you` (permission prompts); `UserPromptSubmit`/`PreToolUse`
+drive `⚡ working`; `PreCompact`/`PostCompact` drive `⏳ compacting`; `Stop`/`SessionEnd` clear it.
 
 **Prereqs:** macOS, cmux (custom sidebars / beta), Claude Code logged in, `jq`, `curl`, `git`.
 
