@@ -19,7 +19,17 @@ if [ -z "$here" ] || [ ! -f "$here/bin/cmux-claude-usage.sh" ]; then
   command -v git >/dev/null 2>&1 || { echo "git is required for the curl installer" >&2; exit 1; }
   cache="${XDG_CACHE_HOME:-$HOME/.cache}/cmux-sentinel"
   echo "Fetching cmux-sentinel → $cache"
-  if [ -d "$cache/.git" ]; then git -C "$cache" pull --ff-only --quiet || true
+  if [ -d "$cache/.git" ]; then
+    # Never silently continue on a failed update — a dirty/diverged/offline cache
+    # would reinstall STALE files while the user thinks they updated. Warn loudly
+    # (with the recovery command) and proceed from cache so offline redeploys still
+    # work; the user can force a clean copy.
+    git -C "$cache" pull --ff-only --quiet || {
+      echo "  ⚠ couldn't update the cached checkout at $cache" >&2
+      echo "    (offline, diverged, or local changes). Installing from the EXISTING" >&2
+      echo "    cache — it may be STALE. For a guaranteed-fresh copy:" >&2
+      echo "      rm -rf \"$cache\"   then re-run the installer." >&2
+    }
   else rm -rf "${cache:?}"; git clone --depth 1 "$REPO_URL" "$cache"; fi
   exec bash "$cache/install.sh"   # WITH_BRIDGE and other env vars survive exec
 fi

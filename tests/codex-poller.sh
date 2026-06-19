@@ -97,5 +97,16 @@ snap 47 7 > "$SESS/rollout-2026-06-19T06-00-00-eeee.jsonl"  # older, populated
 USAGE_PROVIDERS="claude codex" bash "$POLLER" --update; ckcode "fallback --update" "$?" 0
 ckhas "fell back to older snapshot" "47%"
 
+echo "T6: malformed used_percent (over-100 / negative) → clamped, exit 0, no crash"
+reset; codex_stub; snap 150 -5 > "$SESS/rollout-2026-06-19T06-00-00-ffff.jsonl"
+USAGE_PROVIDERS="claude codex" bash "$POLLER" --update; ckcode "over/under --update" "$?" 0
+ckhas "over-100 clamped to 100%" "100%"
+ckhas "negative clamped to 0%" "0%"
+
+echo "T6b: non-numeric / null used_percent → 0%, exit 0, no crash"
+reset; codex_stub; snap '"abc"' null > "$SESS/rollout-2026-06-19T06-00-00-gggg.jsonl"
+USAGE_PROVIDERS="claude codex" bash "$POLLER" --update; ckcode "string/null --update" "$?" 0
+ckhas "string/null → 0%" "0%"
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

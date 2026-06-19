@@ -193,6 +193,17 @@ bucket_field() { # $1=json $2=bucket_snake $3=bucket_camel $4=field_snake $5=fie
     '((.[$bs] // .[$bc]) // {}) | (.[$fs] // .[$fc] // empty)' 2>/dev/null
 }
 
+# Coerce an arbitrary field value to a clamped integer percent (0-100), rounded.
+# Done entirely in jq so untrusted API text is NEVER interpolated into a shell/awk
+# program (the endpoint is unofficial/beta — a malformed or hostile utilization
+# value must not break or inject the script); null/missing/non-numeric → 0.
+to_pct() { # $1 = raw value (may be empty, null, or non-numeric)
+  jq -rn --arg v "${1:-}" '
+    (($v | tonumber?) // 0)
+    | if . < 0 then 0 elif . > 100 then 100 else . end
+    | round' 2>/dev/null || printf '0'
+}
+
 main() {
   local mode="${1:---print}" token json
 
@@ -227,8 +238,8 @@ main() {
   sd_pct=$(bucket_field "$json" seven_day sevenDay utilization utilization)
   sd_reset=$(bucket_field "$json" seven_day sevenDay resets_at resetsAt)
   fh_epoch=$(iso_to_epoch "$fh_reset"); sd_epoch=$(iso_to_epoch "$sd_reset")
-  fh_pct=$(awk "BEGIN{printf \"%d\", ${fh_pct:-0}+0.5}")
-  sd_pct=$(awk "BEGIN{printf \"%d\", ${sd_pct:-0}+0.5}")
+  fh_pct=$(to_pct "$fh_pct")
+  sd_pct=$(to_pct "$sd_pct")
   fh_human=$(humanize_until "$fh_epoch"); sd_human=$(humanize_until "$sd_epoch")
 
   if [ "$mode" = "--print" ]; then

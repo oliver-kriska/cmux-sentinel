@@ -21,7 +21,7 @@ pre-commit:
     # Run the offline state-machine tests (bridge markers + poller gating) when
     # the bridge, the poller, or any test changes.
     test:
-      glob: "{hooks/cmux-bridge.sh,bin/cmux-claude-usage.sh,bin/cmux-codex-usage.sh,tests/*.sh}"
+      glob: "{hooks/cmux-bridge.sh,bin/cmux-claude-usage.sh,bin/cmux-codex-usage.sh,install.sh,tests/*.sh}"
       run: make test
     # Parse-check the sidebar when it changes (only if cmux is installed).
     sidebar:

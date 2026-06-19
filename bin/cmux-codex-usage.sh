@@ -143,6 +143,16 @@ make_bar() {
   printf '%s' "$bar"
 }
 
+# Coerce an arbitrary value to a clamped integer percent (0-100), rounded, entirely
+# in jq — the rate_limits schema is community-observed, so a missing/null/string
+# used_percent must clamp to 0 rather than break or inject the shell.
+to_pct() { # $1 = raw value (may be empty, null, or non-numeric)
+  jq -rn --arg v "${1:-}" '
+    (($v | tonumber?) // 0)
+    | if . < 0 then 0 elif . > 100 then 100 else . end
+    | round' 2>/dev/null || printf '0'
+}
+
 # Amber/red dot only when a limit is getting close (TRAILS the bar so the title
 # still starts with the label that resolve_ref + the sidebar anchor on).
 sev_dot() {
@@ -190,10 +200,8 @@ main() {
   local p5 p7 e5 e7 pct5 pct7 h5 h7
   p5=$(printf '%s' "$rl" | jq -c '.primary')
   p7=$(printf '%s' "$rl" | jq -c '.secondary')
-  pct5=$(printf '%s' "$p5" | jq -r '.used_percent // 0')
-  pct7=$(printf '%s' "$p7" | jq -r '.used_percent // 0')
-  pct5=$(awk "BEGIN{printf \"%d\", ${pct5:-0}+0.5}")
-  pct7=$(awk "BEGIN{printf \"%d\", ${pct7:-0}+0.5}")
+  pct5=$(to_pct "$(printf '%s' "$p5" | jq -r '.used_percent // empty' 2>/dev/null)")
+  pct7=$(to_pct "$(printf '%s' "$p7" | jq -r '.used_percent // empty' 2>/dev/null)")
   e5=$(reset_epoch "$p5"); e7=$(reset_epoch "$p7")
   h5=$(humanize_until "$e5"); h7=$(humanize_until "$e7")
 

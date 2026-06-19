@@ -11,7 +11,8 @@
 SHELL   := bash
 SCRIPTS := bin/cmux-claude-usage.sh bin/cmux-codex-usage.sh bin/cmux-sentinel-doctor.sh \
            hooks/cmux-bridge.sh install.sh scripts/check-secrets.sh \
-           tests/bridge-state.sh tests/poller-gate.sh tests/codex-poller.sh
+           tests/bridge-state.sh tests/poller-gate.sh tests/codex-poller.sh \
+           tests/install-hooks.sh
 MD      := $(wildcard *.md) $(wildcard docs/*.md)
 
 .PHONY: help check ci lint shellcheck secrets markdown test doctor sidebar fmt fmt-check
@@ -37,13 +38,15 @@ markdown:
 	markdownlint $(MD)
 
 # state machines: offline, stub cmux/security/curl, run on Linux CI too.
-#   bridge-state — agent activity markers (⚡/⏳/❓)
-#   poller-gate  — Claude usage-poller provider gating (disabled / not-installed / offline / ok)
-#   codex-poller — Codex usage-poller gating + rollout snapshot parsing (disabled / not-installed / stale / ok)
+#   bridge-state  — agent activity markers (⚡/⏳/❓)
+#   poller-gate   — Claude usage-poller gating + malformed-value clamping + bare-label resolve
+#   codex-poller  — Codex usage-poller gating + rollout snapshot parsing + clamping
+#   install-hooks — install.sh Claude-hook auto-registration (merge / preserve / idempotent / no-jq)
 test:
 	bash tests/bridge-state.sh
 	bash tests/poller-gate.sh
 	bash tests/codex-poller.sh
+	bash tests/install-hooks.sh
 
 # health-check the live setup (read-only) — bridge/hooks/launchd/automation/sentinels.
 doctor:
@@ -51,9 +54,24 @@ doctor:
 
 # sidebar PARSE check — only meaningful where cmux exists (local/pre-commit);
 # skipped in CI. NB: validate only parses; a green parse can still render blank.
+# `cmux sidebar validate` only takes a NAME (it reads ~/.config/cmux/sidebars), so
+# validating `workspaces` would check the DEPLOYED copy, not this repo's file — a
+# broken repo sidebar could pass while the old deployed one is fine. So stage the
+# REPO file under a throwaway name, validate THAT, and remove it. Always reports
+# which file was checked.
+SIDEBAR_DIR := $(HOME)/.config/cmux/sidebars
 sidebar:
 	@if command -v cmux >/dev/null 2>&1; then \
-		cmux sidebar validate workspaces && echo "sidebar validate: ok ✓"; \
+		mkdir -p "$(SIDEBAR_DIR)"; \
+		tmp="$(SIDEBAR_DIR)/workspaces-makecheck.swift"; \
+		cp sidebars/workspaces.swift "$$tmp"; \
+		if cmux sidebar validate workspaces-makecheck >/dev/null 2>&1; then \
+			rm -f "$$tmp"; echo "sidebar validate: ok ✓ (repo file sidebars/workspaces.swift)"; \
+		else \
+			echo "sidebar validate: FAILED for repo sidebars/workspaces.swift" >&2; \
+			cmux sidebar validate workspaces-makecheck || true; \
+			rm -f "$$tmp"; exit 1; \
+		fi; \
 	else \
 		echo "sidebar: cmux not found — skipping parse check"; \
 	fi

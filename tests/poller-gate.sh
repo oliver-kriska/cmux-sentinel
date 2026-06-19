@@ -27,7 +27,15 @@ LOG="$POLLERTEST/.renames"
 case "$1" in
   ping) exit 0 ;;
   workspace)
-    [ "$2" = "list" ] && printf '{"workspaces":[{"title":"5h init","ref":"workspace:1"},{"title":"7d init","ref":"workspace:2"}]}\n'
+    if [ "$2" = "list" ]; then
+      # STUB_BARE=1 → sentinels titled with the BARE label (a freshly-created,
+      # never-updated sentinel) to exercise the bootstrap resolve path.
+      if [ -n "${STUB_BARE:-}" ]; then
+        printf '{"workspaces":[{"title":"5h","ref":"workspace:1"},{"title":"7d","ref":"workspace:2"}]}\n'
+      else
+        printf '{"workspaces":[{"title":"5h init","ref":"workspace:1"},{"title":"7d init","ref":"workspace:2"}]}\n'
+      fi
+    fi
     exit 0 ;;
   rename-workspace)
     shift; title=""
@@ -43,10 +51,12 @@ chmod +x "$ROOT/bin/cmux"
 printf '#!/bin/bash\nexit 1\n' > "$ROOT/bin/security"; chmod +x "$ROOT/bin/security"
 
 # Fake curl: STUB_CURL=ok → emit usage JSON; otherwise fail (simulates offline).
+# Utilization values are injected RAW via STUB_FH/STUB_SH (default 7/42), so tests
+# can feed malformed numbers/strings/null and assert the poller clamps, not crashes.
 cat > "$ROOT/bin/curl" <<'FAKE'
 #!/bin/bash
 [ "${STUB_CURL:-fail}" = "ok" ] || exit 1
-printf '{"five_hour":{"utilization":7,"resets_at":"2026-06-19T20:00:00Z"},"seven_day":{"utilization":42,"resets_at":"2026-06-25T00:00:00Z"}}\n'
+printf '{"five_hour":{"utilization":%s,"resets_at":"2026-06-19T20:00:00Z"},"seven_day":{"utilization":%s,"resets_at":"2026-06-25T00:00:00Z"}}\n' "${STUB_FH:-7}" "${STUB_SH:-42}"
 FAKE
 chmod +x "$ROOT/bin/curl"
 
@@ -86,6 +96,23 @@ STUB_CURL="ok" bash "$POLLER" --update; ckcode "installed+ok --update" "$?" 0
 ckhas "5h sentinel renamed" "5h "
 ckhas "5h utilization" "7%"
 ckhas "7d utilization" "42%"
+
+echo "T5: malformed utilization (over-100 / negative) → clamped, exit 0, no crash"
+reset
+STUB_CURL="ok" STUB_FH="150" STUB_SH="-5" bash "$POLLER" --update; ckcode "over/under --update" "$?" 0
+ckhas "over-100 clamped to 100%" "100%"
+ckhas "negative clamped to 0%" "0%"
+
+echo "T5b: non-numeric / null utilization → 0%, exit 0, no crash"
+reset
+STUB_CURL="ok" STUB_FH='"abc"' STUB_SH="null" bash "$POLLER" --update; ckcode "string/null --update" "$?" 0
+ckhas "string utilization → 0%" "0%"
+
+echo "T6: BARE sentinel titles → poller still resolves + renames (bootstrap path)"
+reset
+STUB_CURL="ok" STUB_BARE="1" bash "$POLLER" --update; ckcode "bare-label --update" "$?" 0
+ckhas "bare 5h resolved + renamed" "5h "
+ckhas "bare 7d resolved + renamed" "7d "
 
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -62,7 +62,7 @@ cmux sidebar validate workspaces && cmux sidebar reload   # validate only PARSES
 ./bin/cmux-codex-usage.sh --update     # renames cx5h/cx7d (needs USAGE_PROVIDERS to list codex)
 
 # offline tests (stub cmux/security/curl/$HOME — run in CI too)
-make test   # bridge-state (36) + poller-gate (10, Claude) + codex-poller (12, Codex)
+make test   # bridge-state (36) + poller-gate (18) + codex-poller (17) + install-hooks (8)
 ```
 
 ## Architecture / where things live
@@ -72,7 +72,7 @@ sidebars/workspaces.swift  the sidebar. isClaudeMeter()/isCodexMeter() = title-l
 bin/cmux-claude-usage.sh    Claude usage poller. make_bar / sev_dot / mark_offline / bucket_field.
 bin/cmux-codex-usage.sh     Codex usage poller (local ~/.codex rollout). latest_snapshot / make_bar / sev_dot / mark_stale.
 hooks/cmux-bridge.sh        Claude Code → cmux agent-state bridge (⚡ working / ⏳ compacting / ❓ waiting-on-you rows).
-tests/                      bridge-state.sh + poller-gate.sh (Claude) + codex-poller.sh (Codex). `make test`.
+tests/                      bridge-state.sh + poller-gate.sh (Claude) + codex-poller.sh (Codex) + install-hooks.sh. `make test`.
 examples/                   usage-sentinels.env + launchd plist templates (com.cmux-claude-usage / com.cmux-codex-usage).
 ```
 
