@@ -123,22 +123,20 @@ func hasRepoInfo(_ w) -> Bool {
   if w.dirty == true { return true }
   return false
 }
+// Dirty is shown as a compact yellow "*" in the row (native "main*" look), NOT
+// spelled out — "uncommitted changes" truncates and eats the narrow line. So
+// repoText carries only branch / PR label (+ stale); the "*" is appended below.
 func repoText(_ w) -> String {
   if hasPR(w) {
     let stale = w.pr.stale == true ? " · stale" : ""
-    let d = w.dirty == true ? " · uncommitted" : ""
-    return "\(w.pr.label)\(stale)\(d)"
+    return "\(w.pr.label)\(stale)"
   }
-  if hasBranch(w) {
-    let d = w.dirty == true ? " · uncommitted" : ""
-    return "\(w.branch)\(d)"
-  }
-  if w.dirty == true { return "uncommitted changes" }
-  return ""
+  if hasBranch(w) { return w.branch }
+  return ""   // dirty-only row: just the branch icon + the yellow "*"
 }
+// Branch / PR label colour. Dirty no longer tints this (the yellow "*" carries it).
 func repoColor(_ w) -> String {
   if hasPR(w) && w.pr.status == "open" { return "#73D0FF" }
-  if w.dirty == true { return "#FFCC66" }
   return "#8A9199"
 }
 // ── usage meters (hidden sentinels) ───────────────────────────────
@@ -151,7 +149,9 @@ func repoColor(_ w) -> String {
 // bridge prefixes real agent workspaces with ⚡/⏳ (never a bare label), so the
 // label is a collision-free, restart-proof anchor both sides share.
 func isClaudeMeter(_ w) -> Bool {
+  if w.title == "5h" { return true }           // bare bootstrap label (before the first poll paints a bar)
   if w.title.hasPrefix("5h ") { return true }  // Claude — 5h session window
+  if w.title == "7d" { return true }           // bare bootstrap label (before the first poll paints a bar)
   if w.title.hasPrefix("7d ") { return true }  // Claude — 7d weekly window
   return false
 }
@@ -220,14 +220,18 @@ func row(_ w) -> some View {
               .foregroundColor(activityColor(w))
               .lineLimit(1).truncationMode(.tail)
           }
-          // dimension 2 — repo / git state (its own row, only when present)
+          // dimension 2 — repo / git state (its own row, only when present).
+          // Dirty = a compact yellow "*" trailing the branch (native "main*"), not prose.
           if hasRepoInfo(w) {
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
               Image(systemName: "arrow.triangle.branch").font(.system(size: 9)).foregroundColor("#6E7787")
               Text(repoText(w))
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(repoColor(w))
                 .lineLimit(1).truncationMode(.tail)
+              if w.dirty == true {
+                Text("*").font(.system(size: 12, design: .monospaced)).bold().foregroundColor("#FFCC66")
+              }
             }
           }
         }

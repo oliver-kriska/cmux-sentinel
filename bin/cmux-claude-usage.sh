@@ -89,8 +89,12 @@ provider_available() {
 # the poller survive a cmux restart (same reason the bridge reads a LIVE
 # $CMUX_WORKSPACE_ID instead of storing one). Prints the ref, or empty if none.
 resolve_ref() { # $1 = label (e.g. "5h")
+  # Match a freshly-created sentinel titled EXACTLY the label ("5h") as well as one
+  # already painted with a bar ("5h ████ …"). Bootstrap matters: install tells users
+  # to name it just "5h", and startswith("5h ") alone never matches that (no trailing
+  # space) — so the first --update could never resolve it and the meter never started.
   cmux workspace list --json 2>/dev/null \
-    | jq -r --arg lbl "$1" '.workspaces[] | select(.title | startswith($lbl + " ")) | .ref' 2>/dev/null \
+    | jq -r --arg lbl "$1" '.workspaces[] | select(.title == $lbl or (.title | startswith($lbl + " "))) | .ref' 2>/dev/null \
     | head -1
 }
 

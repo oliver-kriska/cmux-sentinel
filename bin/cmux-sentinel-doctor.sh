@@ -45,12 +45,14 @@ if [ -f "$inst" ]; then
   settings="$HOME/.claude/settings.json"
   if [ -f "$settings" ] && have jq; then
     missing=""
-    for ev in SessionStart UserPromptSubmit PreToolUse PreCompact PostCompact Stop; do
+    # Notification drives the ❓ "waiting on a permission prompt" state, so it's a
+    # key event too — without it a blocked session never shows "asking…".
+    for ev in SessionStart UserPromptSubmit PreToolUse Notification PreCompact PostCompact Stop; do
       jq -e --arg e "$ev" '(.hooks[$e] // []) | tostring | contains("cmux-bridge")' "$settings" >/dev/null 2>&1 \
         || missing="$missing $ev"
     done
     if [ -z "$missing" ]; then ok "bridge registered for all key hook events"
-    else warn "bridge NOT registered for:$missing (see README — add to ~/.claude/settings.json)"; fi
+    else warn "bridge NOT registered for:$missing — re-run 'WITH_BRIDGE=1 ./install.sh' to auto-wire it (or paste README's hooks block), then RESTART Claude Code"; fi
   else warn "can't check hook registration (need ~/.claude/settings.json + jq)"; fi
 else warn "bridge not installed — working/compacting rows are off (WITH_BRIDGE=1 ./install.sh)"; fi
 
@@ -97,12 +99,12 @@ fi
 if have cmux && have jq; then
   for lbl in "$lbl5" "$lbl7"; do
     ref="$(cmux workspace list --json 2>/dev/null \
-      | jq -r --arg l "$lbl" '.workspaces[] | select(.title|startswith($l+" ")) | .ref' 2>/dev/null | head -1)"
+      | jq -r --arg l "$lbl" '.workspaces[] | select(.title == $l or (.title|startswith($l+" "))) | .ref' 2>/dev/null | head -1)"
     if [ -n "$ref" ]; then
       if [ "$claude_on" = 1 ] && [ "$claude_inst" = 1 ]; then ok "'$lbl' sentinel present ($ref)"
       else warn "'$lbl' sentinel present ($ref) but claude is off/uninstalled — close it to hide the panel: cmux workspace close $ref"; fi
     else
-      if [ "$claude_on" = 1 ] && [ "$claude_inst" = 1 ]; then warn "no '$lbl' sentinel (title starting \"$lbl \") — create it (see install.sh)"
+      if [ "$claude_on" = 1 ] && [ "$claude_inst" = 1 ]; then warn "no '$lbl' sentinel (title \"$lbl\" or starting \"$lbl \") — create it (see install.sh)"
       else ok "no '$lbl' sentinel — panel hidden by design (claude off/uninstalled)"; fi
     fi
   done

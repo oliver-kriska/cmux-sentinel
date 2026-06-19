@@ -27,6 +27,44 @@ fi
 cfg="$HOME/.config/cmux"
 bak() { [ -e "$1" ] && cp "$1" "$1.bak.$(date +%s)" && echo "  backed up $1"; return 0; }
 
+# Idempotently wire the bridge into ~/.claude/settings.json: for each Claude Code
+# hook event the bridge handles, add a {matcher:"", hooks:[{command:…cmux-bridge.sh,
+# async:true}]} entry UNLESS that event already references cmux-bridge. This is the
+# step the tester missed when it was a manual "see README" note — the bridge file
+# alone does nothing until it's registered. Backs the file up first; creates {} if
+# absent. Needs jq; if jq is missing or the file isn't valid JSON we DON'T touch it
+# (don't clobber a hand-edited settings) — we point at the README block. New event
+# registrations only take effect after Claude Code restarts.
+register_hooks() {
+  # The literal ~ is intentional: Claude Code stores and expands it at hook-exec time
+  # (matches the form in a working settings.json), so don't substitute $HOME here.
+  # shellcheck disable=SC2088
+  local settings="$HOME/.claude/settings.json" cmd='~/.claude/hooks/cmux-bridge.sh' tmp
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "  ⚠ jq not found — paste the hooks block from the README into $settings"; return 0
+  fi
+  [ -f "$settings" ] || echo '{}' >"$settings"
+  if ! jq -e . "$settings" >/dev/null 2>&1; then
+    echo "  ⚠ $settings isn't valid JSON — paste the hooks block from the README by hand"; return 0
+  fi
+  bak "$settings"
+  tmp="$(mktemp)"
+  if jq --arg cmd "$cmd" '
+      def ensure($ev):
+        (.hooks[$ev] // []) as $cur
+        | if ($cur | tostring | contains("cmux-bridge")) then .
+          else .hooks[$ev] = ($cur + [{matcher: "", hooks: [{type: "command", command: $cmd, async: true}]}]) end;
+      .hooks = (.hooks // {})
+      | reduce (["SessionStart","UserPromptSubmit","PreToolUse","PreCompact","PostCompact","Stop","StopFailure","Notification","PostToolUseFailure","SessionEnd"][]) as $ev (.; ensure($ev))
+    ' "$settings" >"$tmp" && [ -s "$tmp" ]; then
+    mv "$tmp" "$settings"
+    echo "  -> wired cmux-bridge into $settings (RESTART Claude Code to load new hook events)"
+  else
+    rm -f "$tmp"
+    echo "  ⚠ couldn't update $settings automatically — paste the hooks block from the README"
+  fi
+}
+
 echo "Installing opinionated cmux sidebar from $here"
 
 mkdir -p "$HOME/bin" "$cfg/sidebars" "$HOME/.claude/hooks" "$HOME/Library/LaunchAgents"
@@ -65,7 +103,8 @@ echo "  -> $plist"
 if [ "${WITH_BRIDGE:-0}" = "1" ] || [ -f "$HOME/.claude/hooks/cmux-bridge.sh" ]; then
   bak "$HOME/.claude/hooks/cmux-bridge.sh"
   install -m 0755 "$here/hooks/cmux-bridge.sh" "$HOME/.claude/hooks/cmux-bridge.sh"
-  echo "  -> ~/.claude/hooks/cmux-bridge.sh  (register events in ~/.claude/settings.json — see README)"
+  echo "  -> ~/.claude/hooks/cmux-bridge.sh"
+  register_hooks   # wire the events into settings.json (idempotent) — was the manual step everyone skipped
 fi
 
 cat <<'NEXT'
@@ -99,7 +138,9 @@ cat <<'NEXT'
 6. Verify the whole pipeline:
      ~/bin/cmux-sentinel-doctor.sh        # or, from the repo:  make doctor
 
-(Optional working-state rows: re-run with  WITH_BRIDGE=1 ./install.sh  and wire the hooks per README.)
+(Working-state rows — ⚡ working / ⏳ compacting / ❓ waiting-on-you: run
+ WITH_BRIDGE=1 ./install.sh  — it installs the bridge AND auto-wires the hooks into
+ ~/.claude/settings.json. Then RESTART Claude Code so the new hook events register.)
 
 To UPDATE later: re-run this installer (curl one-liner or `git pull && ./install.sh`), then
 `cmux sidebar reload`. An already-installed bridge refreshes automatically — no flag needed.
