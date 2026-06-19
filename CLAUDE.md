@@ -64,12 +64,17 @@ cmux sidebar validate workspaces && cmux sidebar reload   # validate only PARSES
 ```text
 sidebars/workspaces.swift  the sidebar. isClaudeMeter() = title-label `.hasPrefix` per provider; isUsageMeter() = any.
 bin/cmux-claude-usage.sh    Claude usage poller. make_bar / sev_dot / mark_offline / bucket_field.
-hooks/cmux-bridge.sh        Claude Code → cmux agent-state bridge (⚡ working / ⏳ compacting rows).
+hooks/cmux-bridge.sh        Claude Code → cmux agent-state bridge (⚡ working / ⏳ compacting / ❓ waiting-on-you rows).
 examples/                   usage-sentinels.env + launchd plist templates.
 ```
 
 - **Agent state rides STATIC title markers** the bridge keeps at the FRONT of the title — `⚡` =
-  working, `⏳` = compacting (precedence: compacting > working > needs-you > idle). The sidebar
+  working, `⏳` = compacting, `❓` = waiting-on-you (the session asked a question via
+  `AskUserQuestion`/`ExitPlanMode`, or hit a MID-TURN permission `Notification` — it's alive but
+  parked, so it shows the orange needs-you treatment, NOT green "Working…"). The idle "waiting for
+  input" Notification that fires ~60s after a turn ENDS is gated out (`_notify_waiting` checks for a
+  live pid) so a finished workspace never flips to ❓. Precedence: compacting
+  > waiting > working > needs-you(unread) > idle. The sidebar
   detects them with `.hasPrefix` and strips them for display. STATIC is mandatory: an animated /
   frame-by-frame marker in the title floods cmux's title coalescer and freezes the sidebar
   (upstream cmux #6291). The bridge ref-counts live sessions per workspace as files under
