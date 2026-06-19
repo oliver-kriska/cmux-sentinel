@@ -25,17 +25,34 @@ mkdir -p "$SESS"
 # Fake cmux: ping ok; workspace list --json serves the two codex sentinels with
 # their BARE labels (the real first-run state — no bar appended yet, which the
 # poller must still resolve to bootstrap them); rename logs the resulting title.
+# STUB_MULTIWIN=1 simulates sentinels living in a NON-default window ("win-b"): the
+# default `workspace list` is empty, list-windows offers win-a/win-b, and only
+# `workspace list --window win-b` has them — so the poller must scan windows AND
+# pass --window on the rename (the stub rejects a rename missing the right window).
 cat > "$ROOT/bin/cmux" <<'FAKE'
 #!/bin/bash
 LOG="$CODEXTEST/.renames"
+SENT='{"workspaces":[{"title":"cx5h","ref":"workspace:9"},{"title":"cx7d","ref":"workspace:10"}]}'
 case "$1" in
   ping) exit 0 ;;
+  list-windows) [ -n "${STUB_MULTIWIN:-}" ] && printf '[{"id":"win-a"},{"id":"win-b"}]\n'; exit 0 ;;
   workspace)
-    [ "$2" = "list" ] && printf '{"workspaces":[{"title":"cx5h","ref":"workspace:1"},{"title":"cx7d","ref":"workspace:2"}]}\n'
+    if [ "$2" = "list" ]; then
+      win=""; shift 2
+      while [ $# -gt 0 ]; do case "$1" in --window) win="$2"; shift 2 ;; *) shift ;; esac; done
+      if [ -n "${STUB_MULTIWIN:-}" ]; then
+        [ "$win" = "win-b" ] && printf '%s\n' "$SENT" || printf '{"workspaces":[]}\n'
+      else
+        printf '{"workspaces":[{"title":"cx5h","ref":"workspace:1"},{"title":"cx7d","ref":"workspace:2"}]}\n'
+      fi
+    fi
     exit 0 ;;
   rename-workspace)
-    shift; title=""
-    while [ $# -gt 0 ]; do case "$1" in --workspace) shift 2 ;; *) title="$1"; shift ;; esac; done
+    shift; title=""; win=""
+    while [ $# -gt 0 ]; do case "$1" in --workspace) shift 2 ;; --window) win="$2"; shift 2 ;; *) title="$1"; shift ;; esac; done
+    # In multi-window mode the sentinel is in win-b; a rename without that window
+    # context would hit the wrong/no workspace, so reject it (forces correct --window).
+    [ -n "${STUB_MULTIWIN:-}" ] && [ "$win" != "win-b" ] && exit 1
     printf '%s\n' "$title" >> "$LOG"; exit 0 ;;
   *) exit 0 ;;
 esac
@@ -107,6 +124,12 @@ echo "T6b: non-numeric / null used_percent → 0%, exit 0, no crash"
 reset; codex_stub; snap '"abc"' null > "$SESS/rollout-2026-06-19T06-00-00-gggg.jsonl"
 USAGE_PROVIDERS="claude codex" bash "$POLLER" --update; ckcode "string/null --update" "$?" 0
 ckhas "string/null → 0%" "0%"
+
+echo "T7: sentinels in a NON-default window → scanned + renamed via --window"
+reset; codex_stub; snap 55 5 > "$SESS/rollout-2026-06-19T06-00-00-hhhh.jsonl"
+STUB_MULTIWIN=1 USAGE_PROVIDERS="claude codex" bash "$POLLER" --update; ckcode "multi-window --update" "$?" 0
+ckhas "cx5h renamed in other window" "cx5h "
+ckhas "cx5h pct via --window" "55%"
 
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

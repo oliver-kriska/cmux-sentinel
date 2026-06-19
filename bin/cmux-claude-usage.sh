@@ -93,9 +93,39 @@ resolve_ref() { # $1 = label (e.g. "5h")
   # already painted with a bar ("5h ████ …"). Bootstrap matters: install tells users
   # to name it just "5h", and startswith("5h ") alone never matches that (no trailing
   # space) — so the first --update could never resolve it and the meter never started.
-  cmux workspace list --json 2>/dev/null \
-    | jq -r --arg lbl "$1" '.workspaces[] | select(.title == $lbl or (.title | startswith($lbl + " "))) | .ref' 2>/dev/null \
-    | head -1
+  #
+  # Multi-window: `workspace list` is window-scoped and launchd has NO window context,
+  # so a sentinel parked in a non-default window would be invisible. Try the default
+  # window first (the common single-window case — fast, one call), then fall back to
+  # scanning every window. Prints "<ref>\t<window>" — the window is EMPTY for the
+  # default window (a bare ref suffices) or the window id when found via fallback (so
+  # the caller can pass --window, which makes the positional ref unambiguous). Empty
+  # output means no sentinel anywhere.
+  local lbl="$1" ref w
+  ref=$(cmux workspace list --json 2>/dev/null \
+    | jq -r --arg l "$lbl" '.workspaces[] | select(.title == $l or (.title | startswith($l + " "))) | .ref' 2>/dev/null | head -1)
+  [ -n "$ref" ] && { printf '%s\t' "$ref"; return; }
+  while IFS= read -r w; do
+    [ -n "$w" ] || continue
+    ref=$(cmux workspace list --window "$w" --json 2>/dev/null \
+      | jq -r --arg l "$lbl" '.workspaces[] | select(.title == $l or (.title | startswith($l + " "))) | .ref' 2>/dev/null | head -1)
+    [ -n "$ref" ] && { printf '%s\t%s' "$ref" "$w"; return; }
+  done < <(cmux list-windows --json 2>/dev/null | jq -r '.[].id // empty' 2>/dev/null)
+}
+
+# Resolve a sentinel by label (across windows) and rename it to $2. Echoes cmux's
+# stderr on a rejected rename. Return: 0 ok, 10 sentinel-not-found, 11 rejected.
+# Centralises the resolve + optional --window so every writer (mark_offline and
+# --update) gets multi-window targeting for free.
+_paint() { # $1 = label  $2 = new title
+  local rw ref win err wargs=()
+  rw=$(resolve_ref "$1"); IFS=$'\t' read -r ref win <<<"$rw"
+  [ -n "$ref" ] || return 10
+  [ -n "$win" ] && wargs=(--window "$win")
+  # ${wargs[@]+"${wargs[@]}"} expands to nothing when the array is empty — required
+  # under `set -u` on bash 3.2 (macOS /bin/bash), where a bare "${wargs[@]}" errors.
+  err=$(cmux rename-workspace --workspace "$ref" ${wargs[@]+"${wargs[@]}"} "$2" 2>&1 >/dev/null) || { printf '%s' "$err"; return 11; }
+  return 0
 }
 
 read_token() {
@@ -180,11 +210,10 @@ sev_dot() {
 # sentinel can't be resolved. The "⚠ offline" title still starts with the label,
 # so the sidebar keeps recognising it as a meter and resolve_ref still finds it.
 mark_offline() {
-  local reason="${1:-offline}" r5 r7
+  local reason="${1:-offline}"
   cmux ping &>/dev/null || return 0
-  r5=$(resolve_ref "$LABEL_5H"); r7=$(resolve_ref "$LABEL_7D")
-  [ -n "$r5" ] && cmux rename-workspace --workspace "$r5" "$LABEL_5H  ⚠ ${reason}" &>/dev/null
-  [ -n "$r7" ] && cmux rename-workspace --workspace "$r7" "$LABEL_7D  ⚠ ${reason}" &>/dev/null
+  _paint "$LABEL_5H" "$LABEL_5H  ⚠ ${reason}" >/dev/null 2>&1 || true
+  _paint "$LABEL_7D" "$LABEL_7D  ⚠ ${reason}" >/dev/null 2>&1 || true
 }
 
 # pull a bucket field, snake_case w/ camelCase fallback
@@ -253,29 +282,24 @@ main() {
     # startup — a broken-pipe rejection here means cmux is still on cmuxOnly and
     # must be restarted to apply the mode.
     cmux ping &>/dev/null || die "cmux socket rejected (restart cmux to apply socketControlMode=automation)"
-    # Resolve each sentinel's ref FRESH by title label (ids rotate across cmux
-    # restarts — see resolve_ref). Empty means the sentinel workspace is gone.
-    local ref5 ref7
-    ref5=$(resolve_ref "$LABEL_5H"); ref7=$(resolve_ref "$LABEL_7D")
-    [ -n "$ref5" ] || die "no '$LABEL_5H' sentinel workspace (title starting \"$LABEL_5H \") — create it (see install.sh)"
-    [ -n "$ref7" ] || die "no '$LABEL_7D' sentinel workspace (title starting \"$LABEL_7D \") — create it (see install.sh)"
     # The custom sidebar's workspace data does NOT carry `progress` for idle
     # workspaces (only set on the active/agent workspace) — but the title always
     # propagates. So encode the bar + percent + reset directly in the title. The
     # label leads, the severity dot trails — both sides anchor on the label.
-    local fh_bar sd_bar fh_dot sd_dot rerr
+    local fh_bar sd_bar fh_dot sd_dot err rc
     fh_bar=$(make_bar "$fh_pct" 10); fh_dot=$(sev_dot "$fh_pct")
     sd_bar=$(make_bar "$sd_pct" 10); sd_dot=$(sev_dot "$sd_pct")
-    # The renames are the actual user-visible write. The `ping` gate above passing
-    # does NOT guarantee a rename lands (socket auth could drop mid-run, or a ref
-    # could go stale between resolve and write) — so check each one. A silent
-    # `&>/dev/null` here would let "updated:" print on a no-op; capture cmux's
-    # stderr and fail loudly. (`local rerr` is declared above, separately, so this
-    # assignment's exit code isn't masked by `local` always returning 0.)
-    rerr=$(cmux rename-workspace --workspace "$ref5" "$LABEL_5H ${fh_bar} ${fh_pct}% ${fh_human}${fh_dot}" 2>&1 >/dev/null) \
-      || die "rename rejected for $LABEL_5H sentinel ($ref5): ${rerr:-no detail}"
-    rerr=$(cmux rename-workspace --workspace "$ref7" "$LABEL_7D ${sd_bar} ${sd_pct}% ${sd_human}${sd_dot}" 2>&1 >/dev/null) \
-      || die "rename rejected for $LABEL_7D sentinel ($ref7): ${rerr:-no detail}"
+    # _paint resolves each sentinel FRESH by title label (across windows) and writes
+    # the title — the actual user-visible change. The `ping` gate passing does NOT
+    # guarantee a rename lands (socket auth could drop mid-run, a ref could go stale,
+    # or the sentinel could be gone), so check each: rc 10 = no sentinel (tell the
+    # user to create it), rc 11 = cmux rejected the rename (surface its stderr).
+    err=$(_paint "$LABEL_5H" "$LABEL_5H ${fh_bar} ${fh_pct}% ${fh_human}${fh_dot}"); rc=$?
+    [ "$rc" = 10 ] && die "no '$LABEL_5H' sentinel workspace (title \"$LABEL_5H\" or starting \"$LABEL_5H \") in any window — create it (~/bin/cmux-sentinel-setup.sh, or see install.sh)"
+    [ "$rc" = 11 ] && die "rename rejected for $LABEL_5H sentinel: ${err:-no detail}"
+    err=$(_paint "$LABEL_7D" "$LABEL_7D ${sd_bar} ${sd_pct}% ${sd_human}${sd_dot}"); rc=$?
+    [ "$rc" = 10 ] && die "no '$LABEL_7D' sentinel workspace (title \"$LABEL_7D\" or starting \"$LABEL_7D \") in any window — create it (~/bin/cmux-sentinel-setup.sh, or see install.sh)"
+    [ "$rc" = 11 ] && die "rename rejected for $LABEL_7D sentinel: ${err:-no detail}"
     echo "updated: ${LABEL_5H}=${fh_pct}% (${fh_human})  ${LABEL_7D}=${sd_pct}% (${sd_human})"
     return
   fi

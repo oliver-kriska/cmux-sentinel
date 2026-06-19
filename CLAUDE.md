@@ -20,7 +20,17 @@ break everything. Confirmed traps:
   canonically-working workspace (proven by in-sidebar probe: `progN=0 descN=0`). They show in
   `cmux sidebar-state` but stay `nil` in the sidebar's `workspaces[]`. So the **title** is the only
   writable channel: usage meters AND agent working/compacting state all ride it (set via
-  `cmux rename-workspace`), never `set-progress`.
+  `cmux rename-workspace`), never `set-progress`. **Re-probed on cmux 0.64.16** (via
+  `cmux rpc extension.sidebar.snapshot '{}'`): idle sentinels still report `progress: null`, so the
+  title bars stay necessary — recheck after each upgrade and switch to a native `ProgressView` only
+  if `progress` ever populates. Note `extension.sidebar.snapshot` returns the DATA model, not the
+  rendered tree, so it confirms inputs but still can't catch a parse-passes/render-blank (eyeball it).
+- **Sentinel resolution is multi-window + title-anchored.** `cmux workspace list` is window-scoped and
+  launchd has no window context, so the pollers' `resolve_ref` tries the default window then scans
+  `list-windows`, returning `ref⇥window` and renaming with `--window` (unambiguous positional ref).
+  `bin/cmux-sentinel-setup.sh` creates the sentinels idempotently; both it and the doctor probe
+  `workspace.set_auto_title '{}'` (empty params = no mutation) to warn if global auto-naming could
+  clobber a title prefix.
 - **`cmux sidebar-state` DIVERGES from what the sidebar sees** (it reads the canonical store). Never
   use it to predict the sidebar — verify with an in-sidebar `Text(...)` probe.
 - **cmux 0.64.15 REMOVED stable workspace UUIDs.** `cmux workspace list --json` now returns
@@ -62,17 +72,18 @@ cmux sidebar validate workspaces && cmux sidebar reload   # validate only PARSES
 ./bin/cmux-codex-usage.sh --update     # renames cx5h/cx7d (needs USAGE_PROVIDERS to list codex)
 
 # offline tests (stub cmux/security/curl/$HOME — run in CI too)
-make test   # bridge-state (36) + poller-gate (18) + codex-poller (17) + install-hooks (8)
+make test   # bridge-state(36) poller-gate(18) codex-poller(20) install-hooks(8) sentinel-setup(14)
 ```
 
 ## Architecture / where things live
 
 ```text
 sidebars/workspaces.swift  the sidebar. isClaudeMeter()/isCodexMeter() = title-label `.hasPrefix` per provider; isUsageMeter() = any.
-bin/cmux-claude-usage.sh    Claude usage poller. make_bar / sev_dot / mark_offline / bucket_field.
-bin/cmux-codex-usage.sh     Codex usage poller (local ~/.codex rollout). latest_snapshot / make_bar / sev_dot / mark_stale.
+bin/cmux-claude-usage.sh    Claude usage poller. make_bar / sev_dot / mark_offline / bucket_field / to_pct / resolve_ref(+_paint, multi-window).
+bin/cmux-codex-usage.sh     Codex usage poller (local ~/.codex rollout). latest_snapshot / make_bar / sev_dot / mark_stale / to_pct / resolve_ref(+_paint).
+bin/cmux-sentinel-setup.sh  idempotent sentinel creation (per USAGE_PROVIDERS) + auto-naming guard probe.
 hooks/cmux-bridge.sh        Claude Code → cmux agent-state bridge (⚡ working / ⏳ compacting / ❓ waiting-on-you rows).
-tests/                      bridge-state.sh + poller-gate.sh (Claude) + codex-poller.sh (Codex) + install-hooks.sh. `make test`.
+tests/                      bridge-state + poller-gate + codex-poller + install-hooks + sentinel-setup. `make test`.
 examples/                   usage-sentinels.env + launchd plist templates (com.cmux-claude-usage / com.cmux-codex-usage).
 ```
 

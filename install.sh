@@ -90,6 +90,8 @@ install -m 0755 "$here/bin/cmux-codex-usage.sh" "$HOME/bin/cmux-codex-usage.sh"
 echo "  -> ~/bin/cmux-codex-usage.sh  (opt-in: add 'codex' to USAGE_PROVIDERS)"
 install -m 0755 "$here/bin/cmux-sentinel-doctor.sh" "$HOME/bin/cmux-sentinel-doctor.sh"
 echo "  -> ~/bin/cmux-sentinel-doctor.sh  (run anytime to health-check the setup)"
+install -m 0755 "$here/bin/cmux-sentinel-setup.sh" "$HOME/bin/cmux-sentinel-setup.sh"
+echo "  -> ~/bin/cmux-sentinel-setup.sh  (creates the meter sentinel workspaces for you)"
 
 # 2. sidebar
 bak "$cfg/sidebars/workspaces.swift"
@@ -132,9 +134,11 @@ cat <<'NEXT'
 
 ✅ Files installed. NEXT STEPS (manual — they need your input):
 
-1. Create two throwaway "sentinel" workspaces in cmux (any directory) and name them
-   so their TITLES start with the labels — that's the whole wiring (no ids to copy;
-   cmux dropped stable workspace UUIDs, so the poller + sidebar match by title):
+1. Create the "sentinel" workspaces that hold the meters. EASIEST — let the setup
+   script make them (idempotent; honours USAGE_PROVIDERS; also checks auto-naming):
+     ~/bin/cmux-sentinel-setup.sh
+   Or by hand: create idle workspaces and name them so their TITLES start with the
+   labels (no ids to copy; cmux dropped stable UUIDs, so we match by title):
      cmux workspace list                                    # find the refs
      cmux rename-workspace --workspace workspace:<N> "5h"   # one for 5h, one for 7d
    To use different labels, set SENTINEL_5H_LABEL / SENTINEL_7D_LABEL in

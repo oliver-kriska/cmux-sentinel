@@ -114,12 +114,15 @@ cd cmux-sentinel
 `install.sh` copies the files into place (backing up anything it overwrites) and prints the
 remaining manual steps. In short:
 
-1. **Create two sentinel workspaces** in cmux (any dir) and name them so their **titles start with
-   the labels** — that's the whole wiring, no ids to copy (cmux 0.64.15 dropped stable workspace
+1. **Create the sentinel workspaces.** Easiest — run `~/bin/cmux-sentinel-setup.sh`: it creates the
+   meter workspaces for your enabled providers (idempotent, names + describes them, and warns if
+   cmux's global auto-naming could rename them). Or by hand: create idle workspaces and name them so
+   their **titles start with the labels** — no ids to copy (cmux 0.64.15 dropped stable workspace
    UUIDs, so the poller + sidebar match by title): `cmux rename-workspace --workspace workspace:<N>
    "5h"` (one for `5h`, one for `7d`). To use different labels, set `SENTINEL_5H_LABEL` /
    `SENTINEL_7D_LABEL` in `~/.config/cmux/usage-sentinels.env` and the matching `hasPrefix()` in the
-   sidebar's `isClaudeMeter()`.
+   sidebar's `isClaudeMeter()`. (Sentinels can live in any window — the poller scans all windows —
+   but keep them in the window where the sidebar is shown, since the sidebar renders per-window.)
 2. **Test the poller:** `~/bin/cmux-claude-usage.sh --print` then `--update`.
 3. **Load the sidebar:** `cmux sidebar validate workspaces && cmux sidebar reload`, then
    right-click the sidebar button and pick *workspaces*.
@@ -220,7 +223,8 @@ Codex ships built-in but is **off by default** (out-of-the-box is Claude-only). 
 1. **Enable the poller:** add `codex` to `USAGE_PROVIDERS` in `~/.config/cmux/usage-sentinels.env`,
    e.g. `USAGE_PROVIDERS="claude codex"` (or just `"codex"` to disable Claude). With the name
    absent the Codex poller is a no-op, so this is the on/off switch.
-2. **Create two sentinel workspaces** and name them so their titles start with the Codex labels:
+2. **Create the sentinels:** re-run `~/bin/cmux-sentinel-setup.sh` (it now creates `cx5h`/`cx7d`
+   too, since codex is enabled), or by hand:
    `cmux rename-workspace --workspace workspace:<N> "cx5h"` (one for `cx5h`, one for `cx7d`).
    Override `SENTINEL_CX5H_LABEL` / `SENTINEL_CX7D_LABEL` in the env file if you want different
    labels (match them in the sidebar's `isCodexMeter()`).
@@ -316,12 +320,15 @@ guide that complements cmux's official [authoring reference](https://cmux.com/do
 ```text
 bin/cmux-claude-usage.sh     Claude usage poller — OAuth usage endpoint (--print | --raw | --update)
 bin/cmux-codex-usage.sh      Codex usage poller — local ~/.codex rollout files (--print | --raw | --update)
-bin/cmux-sentinel-doctor.sh  read-only health-check of the whole pipeline (both providers)
+bin/cmux-sentinel-setup.sh   idempotently create the meter sentinel workspaces (+ auto-naming guard)
+bin/cmux-sentinel-doctor.sh  read-only health-check of the whole pipeline (both providers + snapshot)
 sidebars/workspaces.swift    the sidebar (the opinionated design + USAGE panels)
 hooks/cmux-bridge.sh         Claude Code → cmux agent-state bridge (⚡ working / ⏳ compacting / ❓ waiting-on-you)
 tests/bridge-state.sh        offline bridge state-machine test (stubs cmux; `make test`)
-tests/poller-gate.sh         offline Claude poller provider-gating test
-tests/codex-poller.sh        offline Codex poller gating + rollout-parsing test
+tests/poller-gate.sh         offline Claude poller gating + clamping + bare-label + multi-window
+tests/codex-poller.sh        offline Codex poller gating + rollout-parsing + clamping + multi-window
+tests/install-hooks.sh       offline install.sh hook-registration test
+tests/sentinel-setup.sh      offline cmux-sentinel-setup.sh test
 examples/                    usage-sentinels.env + launchd plist templates (Claude + Codex)
 install.sh                   file placement + next-steps
 ```

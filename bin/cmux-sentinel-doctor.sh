@@ -13,6 +13,7 @@ fails=0; warns=0
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 warn() { printf '  \033[33m⚠\033[0m %s\n' "$1"; warns=$((warns + 1)); }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; fails=$((fails + 1)); }
+note() { printf '  \033[2m•\033[0m %s\n' "$1"; }   # neutral info, doesn't affect status
 have() { command -v "$1" >/dev/null 2>&1; }
 
 echo "cmux-sentinel doctor"
@@ -137,6 +138,41 @@ if [ "$codex_on" = 1 ] && have cmux && have jq; then
     elif [ "$codex_inst" = 1 ]; then warn "no '$lbl' sentinel (title \"$lbl\" or starting \"$lbl \") — create it (see install.sh)"
     fi
   done
+fi
+
+# Sidebar DATA snapshot (cmux 0.64.16+ exposes extension.sidebar.snapshot). This is
+# the closest read-only view of what cmux actually projects to the sidebar — handy
+# when a meter looks wrong. NB: the snapshot is the DATA MODEL, not the rendered
+# tree, so it can confirm the inputs are present but CANNOT prove the interpreter
+# rendered them (parse-passes/render-blank is this project's classic failure) — that
+# still needs an eyeball. Also auto-naming guard: if cmux's global auto-naming is on
+# it could rename a sentinel and blank its meter (we can only detect it).
+echo "• sidebar data (snapshot, read-only)"
+if have cmux && have jq; then
+  snap="$(cmux rpc extension.sidebar.snapshot '{}' 2>/dev/null)"
+  if [ -n "$snap" ] && printf '%s' "$snap" | jq -e . >/dev/null 2>&1; then
+    # all meter labels for enabled providers
+    labels=""
+    [ "$claude_on" = 1 ] && labels="$labels $lbl5 $lbl7"
+    [ "$codex_on" = 1 ]  && labels="$labels $lblcx5 $lblcx7"
+    for lbl in $labels; do
+      row="$(printf '%s' "$snap" | jq -r --arg l "$lbl" \
+        'first(.workspaces[] | select(.title == $l or (.title|startswith($l+" ")))) | .title // empty' 2>/dev/null)"
+      if [ -n "$row" ]; then ok "snapshot sees '$lbl' → \"$row\""
+      else warn "snapshot has no '$lbl' sentinel in this window (sidebar renders per-window — keep sentinels in the window the sidebar is shown in)"; fi
+    done
+    note "snapshot proves the sidebar's DATA, not its RENDER — validate only parses; eyeball the panel after changes"
+  else
+    note "extension.sidebar.snapshot unavailable (older cmux?) — skipping; using workspace list above"
+  fi
+  # auto-naming guard (same probe the setup script uses; empty params = no mutation)
+  probe="$(cmux rpc workspace.set_auto_title '{}' 2>&1 || true)"
+  case "$probe" in
+    *[Dd]isabled*[Ss]ettings*) ok "cmux auto-naming OFF globally — sentinel title prefixes are safe" ;;
+    *) warn "cmux auto-naming may be ON — it could rename a sentinel and blank its meter; disable it in Settings" ;;
+  esac
+else
+  note "cmux or jq unavailable — skipping snapshot check"
 fi
 
 echo
