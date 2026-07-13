@@ -17,7 +17,8 @@ ROOT="$(mktemp -d "${TMPDIR:-/tmp}/zed-bridge-test.XXXXXX")"
 trap 'rm -rf "$ROOT"' EXIT
 
 TTY="$ROOT/tty"; STATE="$ROOT/state"
-export ZED_SENTINEL_TTY="$TTY" ZED_SENTINEL_STATE_DIR="$STATE" ZED_SENTINEL_TITLE="TEST"
+# ZED_SENTINEL=1 is the opt-in master gate; the lifecycle tests need it enabled.
+export ZED_SENTINEL=1 ZED_SENTINEL_TTY="$TTY" ZED_SENTINEL_STATE_DIR="$STATE" ZED_SENTINEL_TITLE="TEST"
 P='{"session_id":"S1"}'                    # base payload (fixed session key)
 
 pass=0; fail=0
@@ -66,6 +67,14 @@ fire Stop; rm -f "$STATE/S1.json"
 : >"$TTY"; printf '%s' "$P" | ZED_SENTINEL_FILE=0 bash "$BRIDGE" UserPromptSubmit
 ck "ZED_SENTINEL_FILE=0 → title still painted"         "$(osc)" "⚡ TEST"
 ck "ZED_SENTINEL_FILE=0 → no JSON written"             "$(jstate)" ""
+
+echo "E: opt-in master gate (default disabled)"
+fire Stop; rm -f "$STATE/S1.json"; : >"$TTY"
+printf '%s' "$P" | env -u ZED_SENTINEL bash "$BRIDGE" UserPromptSubmit   # gate unset → no-op
+ck "ZED_SENTINEL unset → no title painted"             "$(osc)" ""
+ck "ZED_SENTINEL unset → no JSON written"              "$(jstate)" ""
+: >"$TTY"; printf '%s' "$P" | ZED_SENTINEL=0 bash "$BRIDGE" UserPromptSubmit  # explicit 0 → no-op
+ck "ZED_SENTINEL=0 → no title painted"                 "$(osc)" ""
 
 echo
 echo "zed-bridge: $pass passed, $fail failed"

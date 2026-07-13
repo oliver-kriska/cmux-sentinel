@@ -36,6 +36,12 @@
 # KNOWN EDGE: Claude Code also sets the terminal title itself, so between hook
 # events it may transiently overwrite our marker; the marker re-asserts on the next
 # event. Set a stable base with ZED_SENTINEL_TITLE to avoid churn if desired.
+#
+# OPT-IN MASTER GATE: the whole Zed integration is OFF by default so other users of
+# this repo are unaffected even if this script is wired as a hook. Enable it for
+# YOURSELF only by exporting ZED_SENTINEL=1 where the hook runs (e.g. ~/.zshrc, so
+# Claude Code inherits it). Unset / 0 → silent no-op. See docs/zed-integration.md.
+[ "${ZED_SENTINEL:-0}" = 1 ] || exit 0
 
 input=$(cat)
 event="${1:-$(printf '%s' "$input" | jq -r '.hook_event_name // "unknown"' 2>/dev/null)}"

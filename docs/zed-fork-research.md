@@ -207,30 +207,32 @@ pain directly and makes the status/usage panel work genuinely optional.
 
 ---
 
-## superzed as prior art (2026-07-13) — a terminal-first Workspaces sidebar already exists
+## superzed as prior art (2026-07-13) — Workspaces sidebar exists, but its agents are ACP
 
-maxktz's **superzed** fork (the sidebar work now on `main`, not the deleted `feat/sidebar`) already
-builds most of "Option B", and — crucially — **terminal-first, not ACP**:
+maxktz's **superzed** fork (sidebar work is on `main`; there is no live `feat/sidebar` — it 404s)
+builds most of "Option B"'s *shell*: a real `crates/sidebar` (~8.6k lines) + `MultiWorkspace`
+(projects-in-one-window) with per-row **git branch** (`project.repositories()…branch.name()`) and a
+**diff badge**. **CORRECTION (verified against source at HEAD `e77dcc9`)** — an earlier draft of this
+note claimed superzed is "terminal-first, not ACP"; that is **wrong**:
 
-- **New `crates/sidebar`** + a `MultiWorkspace` model (projects-in-one-window) with per-row **git
-  branch** (`project.repositories()…branch.name()`) and **diff stats** (`action_log::DiffStats`).
-- **"Chats" are real PTYs.** `ThreadSwitcherEntry::{Thread, Terminal}`; a terminal chat is
-  `project.create_terminal_shell(...)`, and the agent is detected from the **foreground process
-  name** — `KNOWN_TERMINAL_AGENT_COMMANDS = ["claude","codex","aider","amp","gemini",…]` in
-  `crates/agent_ui/src/agent_panel.rs`. Run `claude`/`codex` in a project terminal → it becomes a
-  grouped chat row. This is exactly the non-ACP model the user wants (ACP threads coexist but aren't
-  required).
-- Terminals live in typed **project panes** (`PaneKind::{Tabs, Project, Agent}`), scoped per project.
-- **No usage meters** — none. This is the single cmux-sentinel feature it lacks, i.e. our value-add.
-- **Detects agent identity but not agent STATE.** superzed shows *which* agent (process name); it
-  does NOT show working/compacting/waiting. Our `zed-bridge.sh` JSON status file supplies exactly
-  that missing ⚡/⏳/❓ state — a clean complement, and a plausible contribution.
+- **The agent "chats" are ACP.** The sidebar's chat rows are `ThreadSwitcherEntry::Thread`, keyed by
+  `acp::SessionId`; Codex runs as `codex-acp`, Claude via Zed's ACP external-agent path.
+  `ThreadSwitcherEntry::Terminal` is a **plain** terminal (`TerminalThreadMetadata`), NOT an
+  agent-detected chat.
+- **`KNOWN_TERMINAL_AGENT_COMMANDS`** (`["claude","codex","aider",…]` in `agent_ui/agent_panel.rs`)
+  is real, but its only non-test caller is `terminal_program_to_report` → **telemetry**
+  (`TERMINAL_AGENT_TELEMETRY_ID = "terminal"`). It is **not** wired into the sidebar, so running
+  `claude` in a terminal does **not** promote it to a grouped agent row. Agent-in-terminal is an
+  explicit **future** idea in `FORK.md` — and `FORK.md` isn't even on `main` (it was reset onto a
+  `backup/…` branch). So the non-ACP model the user wants is **not implemented** here.
+- The **diff badge** (`+52 -37`) is `action_log::DiffStats` from the active **agent thread** (lines
+  the agent changed), NOT `git diff` uncommitted lines.
+- **No usage meters** — none anywhere (grepped). Still cmux-sentinel's unique value-add.
 
-Viability caveats: solo maintainer, ~half `WIP:` commits, rewritten history (`backup/…` branches),
-GPL-3, no fork README/intent, 0 PRs, config isolated under `~/.config/superzed` with self-update
-off (built as a personal daily driver). Treat it as a **fork-and-build-on base or reference**, not a
-stable contribution upstream. Most self-contained pieces: `crates/sidebar/`, and the terminal-agent
-detection in `agent_panel.rs` + `terminal_thread_metadata_store.rs`.
+**Verdict:** superzed's multi-workspace + per-project-terminal *layer* is high-quality and a useful
+**reference** if we ever build the fork panel — but its agent model is **ACP**, the exact thing the
+user rejects, so it's not a drop-in. Contribution posture is weak too: solo maintainer, issues
+disabled, 0 PRs, no contribution docs, `main` mid-refactor, GPL-3. Reference-only.
 
 ## Recommendation (updated)
 
