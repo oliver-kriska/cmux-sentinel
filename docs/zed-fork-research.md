@@ -47,9 +47,15 @@ Before writing any Rust, confirm how much of the workflow stock Zed already deli
    (`option-cmd-j` / `ctrl-option-j`); cycle projects with `NextProject`/`PreviousProject`.
 4. For parallel branches, use **Parallel Agents** per-thread git-worktree isolation.
 
-If terminal agents surfaced as "Terminal Threads" in the sidebar carry an **OSC-title status**
-(set by our hook, see below) that Zed renders, you may not need a fork for status either — only
-for usage.
+**Terminal Threads (non-ACP) already do most of the panel you want.** A "Terminal Thread"
+(`zed.dev/blog/terminal-threads`) is a *plain terminal scoped to a project* — NO ACP agent — shown
+in the Threads Sidebar grouped by project, with an auto-updating title, a status icon, and
+click-to-focus, across all open projects. Run each agent as a Terminal Thread and you get the
+project→terminal tree today, no fork. **Caveat (see the OSC correction below):** the native
+Terminal-Thread title is *process-derived*, so it shows e.g. "claude — node", NOT our rich
+⚡/⏳/❓ working/waiting/compacting semantics. If a process-name title is enough, use Terminal
+Threads and skip the fork; if you want the rich agent-state markers, that's what the custom panel
+below adds.
 
 ---
 
@@ -157,18 +163,61 @@ open follow-ups #56316, #56414, #57254, #58608, #59773, #60524, #60776). Guidanc
 No Zed equivalent exists or is in flight (the only "usage" surface is process CPU/mem, #60096).
 Render the pollers' bars in the panel from the status-file JSON. Low collision risk.
 
+### Terminal-centric panel — the exact data path (if we build it)
+
+Target: a left-dock tree of **project → its terminal tabs**, each agent tab showing status. Data path:
+
+1. **All projects:** get the window's `MultiWorkspace` (`crates/workspace/src/multi_workspace.rs`);
+   iterate `mw.workspaces()` → one node per project `Entity<Workspace>`.
+2. **Per project → terminals:** `ws.read(cx).panel::<TerminalPanel>(cx)`, walk `center.panes()` →
+   `pane.read(cx).items()` → downcast to `Entity<TerminalView>` → `.read(cx).terminal()`. Keep
+   `(Entity<Pane>, item_index)` for click-to-focus.
+3. **Per terminal fields** (`crates/terminal/src/terminal.rs`): `breadcrumb_text` (**where OSC-2 lands
+   — our ⚡/⏳/❓**; `title()` does NOT read it, it's process-derived), `working_directory()` (associate
+   to a worktree), `pid()`. **Subtle:** the native tab label ignores OSC, so to show our markers the
+   panel reads `breadcrumb_text` OR our JSON status file (matched by `pid`/`project`).
+4. **Live updates:** `cx.subscribe(&term, …)` on `Event::BreadcrumbsChanged` / `Event::TitleChanged`.
+5. **Click a row:** `pane.update(cx, |p, cx| p.activate_item(ix, true, true, window, cx))` (activate the
+   owning workspace + open the `TerminalPanel` dock first if inactive).
+6. **"+" per project:** `terminal_panel.update(cx, |p, cx| p.add_terminal_shell(Some(root), …))`.
+
+**But first weigh Terminal Threads:** a Terminal Thread is a plain, non-ACP terminal already shown in
+the Threads Sidebar grouped by project, with title + status icon + click-to-focus. It gives the tree
+for free — only weakness is a process-derived title (not our rich state). Fork only if the rich
+⚡/⏳/❓ markers matter more than reusing the native sidebar.
+
 ---
 
-## Recommendation
+## The ACTUAL pain (2026-07-13) — fast cmux→Zed project/worktree handoff
 
-1. **Ship the reusable core here first** (pluggable sinks in the bridge + a usage TUI + a status-file
-   writer). No fork, immediately useful, and it's the data layer the fork depends on anyway.
-2. **Live in stock Zed 0.234+** using the recipe in Step 0. Measure the real gap.
-3. **Only if the gap bites**, build the **reader-style Workspaces dock panel** on a fork based after
-   `#58087`, watching the status file — never modifying the churning sidebar/git code.
+User feedback reframed the goal: **cmux stays the home for terminals/agents; Zed is wanted only for
+file-editing + git UI/history.** The friction is the handoff — switching Zed to the *right project +
+worktree* means window-switch → project picker → worktree picker by hand. That is NOT a fork problem.
 
-This is low-regret: every step is a subset of the next, and the shell-side work is shared between
-cmux and Zed so "switching between them" stays a config flag, not a second codebase.
+**Key fact:** `zed <path>` already **opens the folder into the CURRENT Zed window and switches to
+that project in-place** (default in 0.234; `-n` new window, `-a` add as extra root, `-r` reuse).
+Passing an exact git-worktree path opens that worktree as the project. So the manual dance is
+replaceable by one command run from the cmux terminal (whose `$PWD` already *is* the worktree).
+
+**Proposed integration (tiny, no fork):** `bin/cmux-open-in-zed.sh` — resolve the current cmux
+workspace's worktree root and `exec zed` it; bind it to a cmux key / shell alias so one keystroke
+jumps Zed to exactly what you're working on. Optional `--add` for multi-root. This solves the stated
+pain directly and makes the status/usage panel work genuinely optional.
+
+---
+
+## Recommendation (updated)
+
+Given the reframed pain, the priority order is:
+
+1. **Build `bin/cmux-open-in-zed.sh` + a cmux keybind** — the one-keystroke cmux→Zed handoff to the
+   right project/worktree. Smallest possible change, solves the actual annoyance, no fork.
+2. **Usage TUI pane** (reuse the pollers) if you still want meters visible while in Zed.
+3. **The terminal-centric panel fork** is now *optional* — only if, after living with #1, you still
+   want cmux's full status rail replicated inside Zed rather than glancing back at cmux.
+
+The shell-side work (bridge sinks, pollers, open-in-zed) stays shared between cmux and Zed, so the
+handoff is a config/keybind, not a second codebase.
 
 ---
 
