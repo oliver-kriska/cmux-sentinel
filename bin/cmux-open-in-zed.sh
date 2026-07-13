@@ -15,28 +15,52 @@
 #   cmux-open-in-zed.sh --add        # add as an extra root of the current workspace
 #   cmux-open-in-zed.sh --new        # force a new Zed window
 #   cmux-open-in-zed.sh --print      # dry-run: print the zed command, run nothing
+#   cmux-open-in-zed.sh --shell-init # emit a shell snippet: `ze` alias + zsh keybind
 #
-# Shell alias (drop in ~/.zshrc so any cmux terminal can `ze`):
-#   alias ze='/path/to/cmux-sentinel/bin/cmux-open-in-zed.sh'
-# cmux keybind: bind a key to run this in the focused workspace (its cwd = worktree).
+# Setup — add to ~/.zshrc so any cmux terminal can jump to Zed:
+#   eval "$(/path/to/cmux-sentinel/bin/cmux-open-in-zed.sh --shell-init)"
+# That defines `ze` (run from a workspace shell) and binds Ctrl-O (change with
+# --key '^E') to open Zed on the current worktree. The keybind fires at the SHELL
+# PROMPT only — when an agent owns the terminal it's not the zsh line editor, so it
+# won't fire mid-agent (which is exactly why this is safe, unlike a blind send).
 set -u
 
 MODE=switch                                   # switch | add | new
 DRY=0
+SHELLINIT=0
+KEY='^O'
 DIR=""
-usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --add)             MODE=add ;;
     --new | -n)        MODE=new ;;
     --print | --dry-run) DRY=1 ;;
+    --shell-init)      SHELLINIT=1 ;;
+    --key)             KEY="${2:-}"; shift ;;
     -h | --help)       usage; exit 0 ;;
     -*)                echo "unknown option: $1" >&2; exit 2 ;;
     *)                 DIR="$1" ;;
   esac
   shift
 done
+
+# --shell-init: print a snippet the user evals from ~/.zshrc. No side effects.
+if [ "$SHELLINIT" = 1 ]; then
+  [ -n "$KEY" ] || { echo "--key requires a value" >&2; exit 2; }
+  self="$(cd "$(dirname "$0")" >/dev/null 2>&1 && pwd)/$(basename "$0")"
+  cat <<EOF
+# cmux-sentinel: open the current worktree in Zed (\`ze\`, or the keybind below)
+alias ze='$self'
+if [ -n "\${ZSH_VERSION:-}" ]; then
+  _cmux_open_in_zed() { '$self' </dev/null >/dev/null 2>&1; zle reset-prompt 2>/dev/null; }
+  zle -N _cmux_open_in_zed
+  bindkey '$KEY' _cmux_open_in_zed
+fi
+EOF
+  exit 0
+fi
 
 target="${DIR:-$PWD}"
 [ -d "$target" ] || { echo "not a directory: $target" >&2; exit 2; }
