@@ -23,7 +23,7 @@ fork was meant to add already exists natively.**
 What that means for us:
 
 | Need | Stock Zed 0.234+ | Verdict |
-|---|---|---|
+| --- | --- | --- |
 | Multiple terminals per project | Terminal panel: tabs + splits; "Terminal Threads" grouped per project in the sidebar | ✅ native |
 | Switch between projects/workspaces in one window | `MultiWorkspace` + Threads Sidebar (`NextProject`/`PreviousProject`, `projects::OpenRecent` in-window swap, Cmd+Enter = new window) | ✅ native |
 | Open files of any project like a normal IDE | Project panel (multi-root), `cmd-p` fuzzy open | ✅ native |
@@ -58,13 +58,16 @@ for usage.
 Regardless of fork-vs-no-fork, two pieces port straight over and should live here so cmux and Zed
 share one data layer:
 
-- **Status bridge** — `hooks/cmux-bridge.sh` already turns Claude Code hook events into
-  ⚡ working / ⏳ compacting / ❓ waiting-on-you with a precedence rule. Only the *output sink* is
-  cmux-specific (`cmux rename-workspace`). Add pluggable sinks:
-  - `SINK=osc` → emit `\e]2;<marker> <title>\007` to the agent's tty (Zed terminal tab title;
-    confirmed Zed honours OSC 2). Works with **no fork** for per-tab status.
-  - `SINK=file` → write a per-workspace status file (e.g. `$XDG_RUNTIME_DIR/zed-sentinel/<ws>.json`
-    with `{state, title, provider, updated}`). This is what a native Zed panel would watch.
+- **Status bridge** — `hooks/cmux-bridge.sh` turns Claude Code hook events into
+  ⚡ working / ⏳ compacting / ❓ waiting-on-you with a precedence rule, writing to cmux's title
+  channel. **Shipped: `hooks/zed-bridge.sh`** is the cmux-free Zed counterpart (same event→state
+  precedence, no cross-session ref-count since each agent owns its tty) with two sinks:
+  - **OSC** (default) → emits `\e]2;<marker> <title>\007` to the agent's tty, so status shows on
+    the **Zed terminal tab** today with **no fork** (Zed honours OSC 2, confirmed).
+  - **FILE** (default) → writes `$ZED_SENTINEL_STATE_DIR/<session>.json`
+    (`{state, marker, title, project, session, pid, updated}`) — the channel a native Zed panel
+    watches via `Fs::watch`. Toggle each with `ZED_SENTINEL_OSC=0` / `ZED_SENTINEL_FILE=0`; pin the
+    tab label with `ZED_SENTINEL_TITLE`. Covered by `tests/zed-bridge.sh` (in `make test`).
 - **Usage pollers** — `bin/cmux-claude-usage.sh` / `bin/cmux-codex-usage.sh` are already
   editor-agnostic. Two rendering sinks:
   - a `bin/*-usage-tui.sh` `watch`-style loop rendering the Unicode block bars in one dedicated
@@ -95,10 +98,11 @@ the implementation map.
 
 ### Panel architecture (the `Panel` trait is STABLE — safe to implement against)
 
-- Trait + dock types: `crates/workspace/src/dock.rs` (`Panel: Focusable + EventEmitter<PanelEvent>
-  + Render`, `DockPosition::{Left,Bottom,Right}`). Required methods: `persistent_name`, `panel_key`,
-  `position`/`set_position`/`position_is_valid`, `default_size`, `icon`, `icon_tooltip`,
-  `toggle_action`, `activation_priority`.
+- Trait + dock types: `crates/workspace/src/dock.rs` — the `Panel` trait
+  (supertraits `Focusable`, `EventEmitter<PanelEvent>`, `Render`) and `DockPosition`
+  (`Left`/`Bottom`/`Right`). Required methods: `persistent_name`, `panel_key`, `position`,
+  `set_position`, `position_is_valid`, `default_size`, `icon`, `icon_tooltip`, `toggle_action`,
+  `activation_priority`.
 - Mount API: `Workspace::add_panel` (`crates/workspace/src/workspace.rs`); orchestrated in
   `crates/zed/src/zed.rs::initialize_panels` via `add_panel_when_ready`; per-panel `init(cx)`
   called from `crates/zed/src/main.rs`.
