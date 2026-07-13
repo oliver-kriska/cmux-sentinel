@@ -206,6 +206,31 @@ pain directly and makes the status/usage panel work genuinely optional.
 
 ---
 
+## superzed as prior art (2026-07-13) — a terminal-first Workspaces sidebar already exists
+
+maxktz's **superzed** fork (the sidebar work now on `main`, not the deleted `feat/sidebar`) already
+builds most of "Option B", and — crucially — **terminal-first, not ACP**:
+
+- **New `crates/sidebar`** + a `MultiWorkspace` model (projects-in-one-window) with per-row **git
+  branch** (`project.repositories()…branch.name()`) and **diff stats** (`action_log::DiffStats`).
+- **"Chats" are real PTYs.** `ThreadSwitcherEntry::{Thread, Terminal}`; a terminal chat is
+  `project.create_terminal_shell(...)`, and the agent is detected from the **foreground process
+  name** — `KNOWN_TERMINAL_AGENT_COMMANDS = ["claude","codex","aider","amp","gemini",…]` in
+  `crates/agent_ui/src/agent_panel.rs`. Run `claude`/`codex` in a project terminal → it becomes a
+  grouped chat row. This is exactly the non-ACP model the user wants (ACP threads coexist but aren't
+  required).
+- Terminals live in typed **project panes** (`PaneKind::{Tabs, Project, Agent}`), scoped per project.
+- **No usage meters** — none. This is the single cmux-sentinel feature it lacks, i.e. our value-add.
+- **Detects agent identity but not agent STATE.** superzed shows *which* agent (process name); it
+  does NOT show working/compacting/waiting. Our `zed-bridge.sh` JSON status file supplies exactly
+  that missing ⚡/⏳/❓ state — a clean complement, and a plausible contribution.
+
+Viability caveats: solo maintainer, ~half `WIP:` commits, rewritten history (`backup/…` branches),
+GPL-3, no fork README/intent, 0 PRs, config isolated under `~/.config/superzed` with self-update
+off (built as a personal daily driver). Treat it as a **fork-and-build-on base or reference**, not a
+stable contribution upstream. Most self-contained pieces: `crates/sidebar/`, and the terminal-agent
+detection in `agent_panel.rs` + `terminal_thread_metadata_store.rs`.
+
 ## Recommendation (updated)
 
 Given the reframed pain, the priority order is:
