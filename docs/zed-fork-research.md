@@ -75,10 +75,11 @@ share one data layer:
     watches via `Fs::watch`. Toggle each with `ZED_SENTINEL_OSC=0` / `ZED_SENTINEL_FILE=0`; pin the
     tab label with `ZED_SENTINEL_TITLE`. Covered by `tests/zed-bridge.sh` (in `make test`).
 - **Usage pollers** — `bin/cmux-claude-usage.sh` / `bin/cmux-codex-usage.sh` are already
-  editor-agnostic. Two rendering sinks:
-  - a `bin/*-usage-tui.sh` `watch`-style loop rendering the Unicode block bars in one dedicated
-    Zed terminal pane (no fork), and/or
-  - the same JSON status-file for a native panel to read.
+  editor-agnostic. **Shipped: `bin/zed-usage-tui.sh`** renders their `--print` output as the same
+  Unicode block bars (5h/7d + Codex, severity dots) in one dedicated terminal pane — live
+  (`ZED_USAGE_INTERVAL`, default 30s) or `--once`. Works in superzed or stock Zed, no fork; providers
+  self-gate (disabled/uninstalled → hidden, offline → "⚠ offline"). Covered by `tests/usage-tui.sh`.
+  A future native panel can read the same pollers (or the bridge JSON) instead.
 
 Do this first — it's a strict subset of the fork's needs and immediately usable.
 
