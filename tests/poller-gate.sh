@@ -31,13 +31,16 @@ case "$1" in
     if [ "$2" = "list" ]; then
       # STUB_BARE=1 → sentinels titled with the BARE label (a freshly-created,
       # never-updated sentinel) to exercise the bootstrap resolve path.
+      # STUB_M7D=1 → the opt-in per-model sentinel also exists.
+      extra=""
+      [ -n "${STUB_M7D:-}" ] && extra=',{"title":"m7d init","ref":"workspace:3"}'
       if [ -n "${STUB_NO_5H:-}" ]; then
         # The 5h sentinel was closed — an ordinary workspace anyone can close.
-        printf '{"workspaces":[{"title":"7d init","ref":"workspace:2"}]}\n'
+        printf '{"workspaces":[{"title":"7d init","ref":"workspace:2"}%s]}\n' "$extra"
       elif [ -n "${STUB_BARE:-}" ]; then
-        printf '{"workspaces":[{"title":"5h","ref":"workspace:1"},{"title":"7d","ref":"workspace:2"}]}\n'
+        printf '{"workspaces":[{"title":"5h","ref":"workspace:1"},{"title":"7d","ref":"workspace:2"}%s]}\n' "$extra"
       else
-        printf '{"workspaces":[{"title":"5h init","ref":"workspace:1"},{"title":"7d init","ref":"workspace:2"}]}\n'
+        printf '{"workspaces":[{"title":"5h init","ref":"workspace:1"},{"title":"7d init","ref":"workspace:2"}%s]}\n' "$extra"
       fi
     fi
     exit 0 ;;
@@ -70,6 +73,7 @@ printf '#!/bin/bash\nexit 1\n' > "$ROOT/bin/security"; chmod +x "$ROOT/bin/secur
 # status line entirely — the old-curl path, which must still work off the exit code.
 cat > "$ROOT/bin/curl" <<'FAKE'
 #!/bin/bash
+echo x >> "$POLLERTEST/.curlcalls"      # every real API call leaves a mark
 [ "${STUB_CURL:-fail}" = "ok" ] || exit 1
 code="${STUB_HTTP:-200}"
 if [ "$code" != "200" ]; then
@@ -79,7 +83,14 @@ elif [ -n "${STUB_MISSING_BUCKET:-}" ]; then
 elif [ -n "${STUB_BAD_RESET:-}" ]; then
   body='{"five_hour":{"utilization":7,"resets_at":null},"seven_day":{"utilization":42,"resets_at":{"unexpected":true}}}'
 else
-  body=$(printf '{"five_hour":{"utilization":%s,"resets_at":"2026-06-19T20:00:00Z"},"seven_day":{"utilization":%s,"resets_at":"2026-06-25T00:00:00Z"}}' "${STUB_FH:-7}" "${STUB_SH:-42}")
+  # STUB_SCOPED=<pct> adds the modern self-describing limits[] array with a
+  # per-model weekly cap. STUB_SCOPED_NAME proves the model name is read from the
+  # payload rather than hardcoded anywhere.
+  limits=""
+  if [ -n "${STUB_SCOPED:-}" ]; then
+    limits=$(printf ',"limits":[{"kind":"five_hour","group":"session","percent":7},{"kind":"weekly_scoped","group":"weekly","percent":%s,"resets_at":"2026-06-25T00:00:00Z","scope":{"model":{"id":null,"display_name":"%s"},"surface":null}}]' "$STUB_SCOPED" "${STUB_SCOPED_NAME:-Fable}")
+  fi
+  body=$(printf '{"five_hour":{"utilization":%s,"resets_at":"2026-06-19T20:00:00Z"},"seven_day":{"utilization":%s,"resets_at":"2026-06-25T00:00:00Z"}%s}' "${STUB_FH:-7}" "${STUB_SH:-42}" "$limits")
 fi
 printf '%s' "$body"
 [ -n "${STUB_NO_CODE:-}" ] || printf '\n%s' "$code"
@@ -93,6 +104,8 @@ CREDS="$ROOT/home/.claude/.credentials.json"
 RENAMES="$ROOT/.renames"
 PROGRESS="$ROOT/.progress"
 STAMP="$ROOT/home/.local/state/cmux-sentinel/usage/claude.last-success"
+CACHE="$ROOT/home/.local/state/cmux-sentinel/usage/claude.last-response.json"
+CURLCALLS="$ROOT/.curlcalls"
 TOKEN_JSON='{"claudeAiOauth":{"accessToken":"faketoken"}}'
 
 pass=0; fail=0
@@ -112,7 +125,16 @@ ckstamp() { if [ -s "$STAMP" ] && grep -Eq '^[0-9]+$' "$STAMP"; then pass=$((pas
             else fail=$((fail + 1)); printf '  ✗ %s — no valid success stamp\n' "$1"; fi; }
 cknostamp() { if [ ! -e "$STAMP" ]; then pass=$((pass + 1)); printf '  ✓ %s\n' "$1"
               else fail=$((fail + 1)); printf '  ✗ %s — unexpected success stamp\n' "$1"; fi; }
-reset()  { rm -f "$RENAMES" "$PROGRESS" "$STAMP"; }
+# Drop the response cache too: each test feeds curl a DIFFERENT payload, so a body
+# cached by the previous test would be served instead and quietly assert nothing.
+reset()  { rm -f "$RENAMES" "$PROGRESS" "$STAMP" "$CACHE" "$CURLCALLS"; }
+# Same, but KEEPS a warm cache — for asserting what a cached body does next.
+reset_warm() { rm -f "$RENAMES" "$PROGRESS" "$STAMP" "$CURLCALLS"; }
+OUT=""
+ckout()    { if printf '%s' "$OUT" | grep -q -- "$2"; then pass=$((pass + 1)); printf '  ✓ %s\n' "$1"
+             else fail=$((fail + 1)); printf '  ✗ %s — [%s] not in stdout:\n%s\n' "$1" "$2" "$OUT"; fi; }
+ckoutnot() { if printf '%s' "$OUT" | grep -q -- "$2"; then fail=$((fail + 1)); printf '  ✗ %s — unexpected [%s] in stdout:\n%s\n' "$1" "$2" "$OUT"
+             else pass=$((pass + 1)); printf '  ✓ %s\n' "$1"; fi; }
 
 echo "T1: disabled (USAGE_PROVIDERS without claude) → exit 0, writes nothing"
 reset; printf '%s' "$TOKEN_JSON" > "$CREDS"          # installed, but explicitly disabled
@@ -216,6 +238,102 @@ reset
 STUB_CURL="ok" STUB_NO_CODE=1 bash "$POLLER" --update; ckcode "no-status-line --update" "$?" 0
 ckhas "body-only response still paints 5h" "5h |7%"
 ckhas "body-only response still paints 7d" "7d |42%"
+
+echo "T10: the response cache collapses a human burst, but never a failure"
+# print-then-update is the natural way to use this and it used to be two API calls
+# seconds apart, on top of the 5-minute poll — that burst is what trips 429.
+reset
+STUB_CURL="ok" CMUX_SENTINEL_USAGE_CACHE_TTL=600 bash "$POLLER" --print >/dev/null
+STUB_CURL="ok" CMUX_SENTINEL_USAGE_CACHE_TTL=600 bash "$POLLER" --update >/dev/null
+ckcode "cached print+update still succeeds" "$?" 0
+calls=$(wc -l < "$CURLCALLS" 2>/dev/null | tr -d ' ')
+if [ "$calls" = "1" ]; then pass=$((pass + 1)); printf '  ✓ two invocations, one API call\n'
+else fail=$((fail + 1)); printf '  ✗ two invocations made %s API calls (want 1)\n' "$calls"; fi
+ckhas "the cached body still paints" "5h |7%"
+
+reset
+STUB_CURL="ok" CMUX_SENTINEL_USAGE_CACHE_TTL=0 bash "$POLLER" --print >/dev/null
+STUB_CURL="ok" CMUX_SENTINEL_USAGE_CACHE_TTL=0 bash "$POLLER" --print >/dev/null
+calls=$(wc -l < "$CURLCALLS" 2>/dev/null | tr -d ' ')
+if [ "$calls" = "2" ]; then pass=$((pass + 1)); printf '  ✓ TTL=0 disables the cache\n'
+else fail=$((fail + 1)); printf '  ✗ TTL=0 made %s API calls (want 2)\n' "$calls"; fi
+
+# A failure must never be WRITTEN to the cache: a 429 has to stay visible as
+# ⚠ rate limit, and the next poll must retry the network rather than replay the
+# error. (Within the TTL a warm cache means the 429 is never even reached — that
+# is the point of the cache, and it's covered by the burst case above.)
+reset
+STUB_CURL="ok" STUB_HTTP=429 CMUX_SENTINEL_USAGE_CACHE_TTL=600 bash "$POLLER" --update >/dev/null 2>&1
+ckcode "a cold-cache 429 fails" "$?" 1
+ckhas "429 surfaces as ⚠ rate limit" "⚠ rate limit"
+reset_warm   # keep whatever the failed run left behind
+STUB_CURL="ok" STUB_HTTP=429 CMUX_SENTINEL_USAGE_CACHE_TTL=600 bash "$POLLER" --update >/dev/null 2>&1
+ckcode "the next poll fails again — the error was not cached" "$?" 1
+calls=$(wc -l < "$CURLCALLS" 2>/dev/null | tr -d ' ')
+if [ "$calls" = "1" ]; then pass=$((pass + 1)); printf '  ✓ a failed response is never served from cache\n'
+else fail=$((fail + 1)); printf '  ✗ failed response made %s API calls (want 1 — a retry)\n' "$calls"; fi
+
+echo "T11: the per-model weekly cap (opt-in m7d) — visible in --print, metered only on request"
+# Anthropic publishes a model-scoped weekly cap in the modern limits[] array. It is
+# NOT metered by default: a sentinel is an ordinary workspace, so the row would cost
+# one of the ⌘1…⌘9 keys (same rule as the Amp orb meter).
+reset
+OUT=$(STUB_CURL="ok" STUB_SCOPED=15 bash "$POLLER" --print)
+ckout "--print surfaces the cap even when it isn't metered" "m7d 15%"
+ckout "--print says how to turn it on" "CLAUDE_MODEL_METER=1"
+OUT=$(STUB_CURL="ok" STUB_SCOPED=15 CLAUDE_MODEL_METER=1 bash "$POLLER" --print)
+ckoutnot "--print drops the hint once it IS metered" "CLAUDE_MODEL_METER=1"
+
+# --buckets drives setup. Only a POSITIVE answer may suppress a sentinel.
+reset
+OUT=$(STUB_CURL="ok" STUB_SCOPED=15 bash "$POLLER" --buckets)
+ckout "--buckets always lists the account-wide windows" "7d"
+ckoutnot "--buckets omits m7d while the meter is off" "m7d"
+reset
+OUT=$(STUB_CURL="ok" STUB_SCOPED=15 CLAUDE_MODEL_METER=1 bash "$POLLER" --buckets)
+ckout "--buckets lists m7d once opted in AND the cap exists" "m7d"
+reset
+OUT=$(STUB_CURL="ok" CLAUDE_MODEL_METER=1 bash "$POLLER" --buckets)
+ckoutnot "--buckets omits m7d when the account has no such cap" "m7d"
+reset
+OUT=$(STUB_CURL="fail" CLAUDE_MODEL_METER=1 bash "$POLLER" --buckets 2>/dev/null)
+if [ -z "$OUT" ]; then pass=$((pass + 1)); printf '  ✓ --buckets fails OPEN (silent when it cannot tell)\n'
+else fail=$((fail + 1)); printf '  ✗ --buckets spoke up on a failed fetch: %s\n' "$OUT"; fi
+
+# --update: off = never touch the row; on = paint it from the PAYLOAD's model name.
+reset
+STUB_CURL="ok" STUB_SCOPED=15 STUB_M7D=1 bash "$POLLER" --update >/dev/null
+ckcode "opt-out update ignores the m7d sentinel entirely" "$?" 0
+cknothas "opt-out update writes no m7d title" "m7d"
+reset
+STUB_CURL="ok" STUB_SCOPED=15 STUB_M7D=1 CLAUDE_MODEL_METER=1 bash "$POLLER" --update >/dev/null
+ckcode "opted-in update succeeds" "$?" 0
+ckhas "m7d row carries the payload's model name" "m7d |Fable 15%"
+ckprog "m7d native progress value (15% → 0.15)" "PROG 0.15"
+# The model name must come from the payload — Anthropic re-scopes which model is
+# capped, and scope.model.id is null, so display_name is the only handle there is.
+reset
+STUB_CURL="ok" STUB_SCOPED=88 STUB_SCOPED_NAME="Zephyr" STUB_M7D=1 CLAUDE_MODEL_METER=1 bash "$POLLER" --update >/dev/null
+ckhas "a renamed model follows the payload, not a hardcoded name" "m7d |Zephyr 88%"
+cknothas "no stale model name leaks into the row" "Fable"
+
+# Opted in, but this account has no model-scoped cap: honest 'n/a', never a
+# fabricated 0%, and never a hard failure (Anthropic adds and drops these).
+reset
+STUB_CURL="ok" STUB_M7D=1 CLAUDE_MODEL_METER=1 bash "$POLLER" --update >/dev/null
+ckcode "a vanished cap is not an error" "$?" 0
+ckhas "an unmetered m7d row reads n/a" "m7d |n/a|"
+cknothas "a vanished cap never fabricates 0%" "m7d |.*0%"
+ckhas "the account-wide meters still paint" "5h |7%"
+
+# A missing m7d sentinel is a real broken install — but it must not cost the two
+# account-wide meters (the ledger property T7 pins for 5h/7d).
+reset
+STUB_CURL="ok" STUB_SCOPED=15 CLAUDE_MODEL_METER=1 bash "$POLLER" --update >/dev/null 2>&1
+ckcode "a missing m7d sentinel still reports failure" "$?" 1
+ckhas "…but 5h still painted" "5h |7%"
+ckhas "…and 7d still painted" "7d |42%"
+ckstamp "a landed meter is still fresh data"
 
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

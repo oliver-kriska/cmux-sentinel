@@ -237,5 +237,19 @@ case "$out6" in *"are eating ⌘6, ⌘7, ⌘8"*) ok "collapsed members are exclu
 case "$out" in *"all 9 ⌘ keys in window win-b are on real workspaces"*) ok "ungrouped baseline is unchanged";;
   *) bad "ungrouped baseline regressed";; esac
 
+echo "T10: the opt-in per-model meter is only 'missing' when it was asked for"
+# CLAUDE_MODEL_METER=1 is the user's positive request; without it an absent m7d row
+# is correct, not a broken install. Getting this backwards would nag every Claude
+# user forever to create a meter they never asked for.
+printf 'USAGE_PROVIDERS="claude"\n' > "$HOME/.config/cmux/usage-sentinels.env"
+out7="$(bash "$DOCTOR" 2>&1)"
+case "$out7" in *"no 'm7d' sentinel — correct, it isn't metered"*) ok "an absent m7d is correct while the meter is off";;
+  *) bad "absent m7d was not reported as correct";; esac
+case "$out7" in *"no 'm7d' sentinel (title"*) bad "doctor nagged about an m7d nobody asked for";;
+  *) ok "no false m7d creation advice";; esac
+out8="$(CLAUDE_MODEL_METER=1 bash "$DOCTOR" 2>&1)"
+case "$out8" in *"no 'm7d' sentinel (title"*) ok "opting in makes a missing m7d actionable";;
+  *) bad "opted-in missing m7d was not reported";; esac
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

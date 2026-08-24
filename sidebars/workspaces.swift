@@ -174,6 +174,12 @@ func isClaudeMeter(_ w) -> Bool {
   if w.title.hasPrefix("5h ") { return true }  // Claude — 5h session window
   if w.title == "7d" { return true }           // bare bootstrap label (before the first poll paints a bar)
   if w.title.hasPrefix("7d ") { return true }  // Claude — 7d weekly window
+  // Per-MODEL weekly cap (e.g. a Fable-scoped allowance), opt-in via
+  // CLAUDE_MODEL_METER=1. The MODEL NAME is never part of the anchor — it rides
+  // the title's detail text, because the anchor must be a static literal here and
+  // Anthropic re-scopes which model is capped at will.
+  if w.title == "m7d" { return true }           // bare bootstrap label
+  if w.title.hasPrefix("m7d ") { return true }  // Claude — model-scoped weekly window
   return false
 }
 // Codex provider — same shape as isClaudeMeter, distinct labels so the two never
@@ -484,7 +490,9 @@ VStack(alignment: .leading, spacing: 0) {
   // Meters sort by WINDOW length (the short 5h/cx5h above the weekly 7d/cx7d), not
   // by workspace .index — index depends on sentinel creation order and reshuffles
   // across restarts, which would flip the rows. Match the stable title PREFIX,
-  // never a substring: a weekly countdown can itself contain "5h".
+  // never a substring: a weekly countdown can itself contain "5h". The optional
+  // m7d row has no rank of its own — it keeps workspace order, which puts it after
+  // 7d because setup creates it last.
   if workspaces.filter { isClaudeMeter($0) }.count > 0 {
     VStack(alignment: .leading, spacing: 6) {
       Text("CLAUDE USAGE").font(.system(size: 10, design: .monospaced)).bold().foregroundColor("#8A9199")

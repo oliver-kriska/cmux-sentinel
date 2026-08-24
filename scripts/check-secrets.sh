@@ -55,6 +55,13 @@ if [ -f sidebars/workspaces.swift ] \
   && ! grep -Eq 'w\.title\.hasPrefix\("(5h|7d) "\)' sidebars/workspaces.swift; then
   flag "sidebar is missing its isClaudeMeter title anchors (w.title.hasPrefix)" "sidebars/workspaces.swift"
 fi
+# The opt-in per-model row (CLAUDE_MODEL_METER=1) ships its anchor unconditionally
+# for the same reason ampo does: opting in creates a sentinel, and a sentinel with
+# no anchor is an invisible workspace eating a ⌘ key.
+if [ -f sidebars/workspaces.swift ] \
+  && ! grep -Eq 'w\.title\.hasPrefix\("m7d "\)' sidebars/workspaces.swift; then
+  flag "sidebar is missing its per-model meter title anchor (w.title.hasPrefix)" "sidebars/workspaces.swift"
+fi
 # Same for the Codex provider — a clobber that dropped isCodexMeter would silently
 # kill the CODEX USAGE panel for everyone who opted in.
 if [ -f sidebars/workspaces.swift ] \

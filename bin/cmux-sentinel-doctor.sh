@@ -116,6 +116,7 @@ envf="$CFG/usage-sentinels.env"
 # shellcheck disable=SC1090
 [ -f "$envf" ] && . "$envf"
 lbl5="${SENTINEL_5H_LABEL:-5h}"; lbl7="${SENTINEL_7D_LABEL:-7d}"
+lblm7d="${SENTINEL_M7D_LABEL:-m7d}"
 providers="${USAGE_PROVIDERS:-claude}"
 usage_state_dir="${CMUX_SENTINEL_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/cmux-sentinel}/usage"
 stale_after="${USAGE_STALE_AFTER_SECONDS:-900}"
@@ -231,15 +232,22 @@ else
 fi
 
 if have cmux && have jq; then
-  for lbl in "$lbl5" "$lbl7"; do
+  # m7d (the per-model weekly cap) is metered only when CLAUDE_MODEL_METER=1 —
+  # same local opt-in policy as the Amp orb meter, and for the same reason: an
+  # unmetered sentinel reads 'n/a' forever while still eating a ⌘ key.
+  for lbl in "$lbl5" "$lbl7" "$lblm7d"; do
+    lbl_metered=1
+    [ "$lbl" = "$lblm7d" ] && [ "${CLAUDE_MODEL_METER:-0}" != 1 ] && lbl_metered=0
     rw="$(resolve_ref "$lbl")"; IFS=$'\t' read -r ref ref_win <<<"$rw"
     where="$ref"; [ -n "$ref_win" ] && where="$where in window $ref_win"
     close_cmd="$(close_hint "$ref" "$ref_win")"
     if [ -n "$ref" ]; then
-      if [ "$claude_on" = 1 ] && [ "$claude_inst" = 1 ]; then ok "'$lbl' sentinel present ($where)"
-      else warn "'$lbl' sentinel present ($where) but claude is off/uninstalled — close it to hide the panel: $close_cmd"; fi
+      if [ "$claude_on" != 1 ] || [ "$claude_inst" != 1 ]; then warn "'$lbl' sentinel present ($where) but claude is off/uninstalled — close it to hide the panel: $close_cmd"
+      elif [ "$lbl_metered" = 0 ]; then warn "'$lbl' sentinel present ($where) but it isn't metered (CLAUDE_MODEL_METER is off) — it'll read 'n/a' forever and still eats a ⌘ key: $close_cmd"
+      else ok "'$lbl' sentinel present ($where)"; fi
     else
-      if [ "$claude_on" = 1 ] && [ "$claude_inst" = 1 ]; then warn "no '$lbl' sentinel (title \"$lbl\" or starting \"$lbl \") — create it: $HERE/cmux-sentinel-setup.sh"
+      if [ "$lbl_metered" = 0 ]; then ok "no '$lbl' sentinel — correct, it isn't metered"
+      elif [ "$claude_on" = 1 ] && [ "$claude_inst" = 1 ]; then warn "no '$lbl' sentinel (title \"$lbl\" or starting \"$lbl \") — create it: $HERE/cmux-sentinel-setup.sh"
       else ok "no '$lbl' sentinel — panel hidden by design (claude off/uninstalled)"; fi
     fi
   done
@@ -401,7 +409,7 @@ fi
 # drag-reordering; see CLAUDE.md.)
 echo "• ⌘N shortcut layout"
 if have cmux && have jq; then
-  lay_labels="$(printf '%s\n' "$lbl5" "$lbl7" "$lblcx5" "$lblcx7" "$lblampu" "$lblampo" | jq -R . | jq -s .)"
+  lay_labels="$(printf '%s\n' "$lbl5" "$lbl7" "$lblm7d" "$lblcx5" "$lblcx7" "$lblampu" "$lblampo" | jq -R . | jq -s .)"
   # The rows cmux actually numbers for ⌘1…⌘9 — kept identical to the copy in
   # bin/cmux-sentinel-setup.sh (setup parks by it, the doctor reports drift off it).
   # Since 0.64.22 (#9176) ⌘N indexes the ORDINARY sidebar rows, so a group ANCHOR
@@ -491,7 +499,10 @@ if have cmux && have jq; then
   if [ -n "$snap" ] && printf '%s' "$snap" | jq -e . >/dev/null 2>&1; then
     # all meter labels for enabled providers
     labels=""
-    [ "$claude_on" = 1 ] && labels="$labels $lbl5 $lbl7"
+    if [ "$claude_on" = 1 ]; then
+      labels="$labels $lbl5 $lbl7"
+      [ "${CLAUDE_MODEL_METER:-0}" = 1 ] && labels="$labels $lblm7d"
+    fi
     if [ "$codex_on" = 1 ]; then
       if [ "${cx_status:-unknown}" = "available" ]; then
         printf '%s\n' "$cx_live" | grep -qxF -- "$lblcx5" && labels="$labels $lblcx5"

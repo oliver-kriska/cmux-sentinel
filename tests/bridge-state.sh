@@ -164,5 +164,54 @@ stale "$WORKDIR/$PID2"; stale "$WORKDIR/.waiting.$PID2"
 fire SessionStart "$A";  ck "blocked-on-you survives any age → ❓" "❓enaia"
 fire Stop        "$PID2"; ck "Stop → idle"                    "enaia"
 
+echo "L: ❓ notifier — opt-in, once per transition, and never able to break a hook"
+# The notifier runs DETACHED on the agent's hot path, so every assertion here waits
+# for the recorder file rather than assuming the child already ran.
+NOTED="$ROOT/.notified"
+notewait() { # $1 = expected line count; returns as soon as it is reached
+  local i=0
+  while [ "$i" -lt 50 ]; do
+    # `<` on a missing file fails in the SHELL, before wc runs, so 2>/dev/null on
+    # wc can't silence it — test existence first.
+    [ -f "$NOTED" ] && [ "$(wc -l < "$NOTED")" -ge "$1" ] && return 0
+    i=$((i + 1)); sleep 0.1
+  done
+  return 1
+}
+cknote() { if [ "$2" = "$3" ]; then pass=$((pass + 1)); printf '  ✓ %s\n' "$1"
+           else fail=$((fail + 1)); printf '  ✗ %s — got [%s] want [%s]\n' "$1" "$2" "$3"; fi; }
+
+printf 'enaia' > "$ROOT/.title"; rm -rf "$WORKDIR"; rm -f "$NOTED"
+# shellcheck disable=SC2016  # $1/$2 belong to the notifier's `sh -c`, not to us
+export CMUX_SENTINEL_NOTIFY_CMD='printf "%s|%s\n" "$1" "$2" >> '"$NOTED"
+firet PreToolUse "$PID2" AskUserQuestion; ck "asks → ❓ (notifier armed)" "❓enaia"
+notewait 1
+cknote "notifier fires on the ❓ transition" "$(cat "$NOTED" 2>/dev/null)" "enaia|waiting"
+
+# Still waiting: _set_waiting returns at its guard, so no second alert. This is the
+# property that makes the alert worth keeping — one per transition, not per event.
+firet PreToolUse "$PID2" AskUserQuestion
+firet PreToolUse "$PID2" ExitPlanMode
+sleep 0.3
+cknote "already-waiting fires no duplicate" "$(wc -l < "$NOTED" | tr -d ' ')" "1"
+
+# Resume, then block again → a genuinely new transition, so a second alert is right.
+fire Stop "$PID2"; ck "Stop → idle" "enaia"
+firet PreToolUse "$PID2" AskUserQuestion; ck "asks again → ❓" "❓enaia"
+notewait 2
+cknote "a NEW transition alerts again" "$(wc -l < "$NOTED" | tr -d ' ')" "2"
+
+# A notifier that fails must not cost the marker — it is on the hot path.
+fire Stop "$PID2"; printf 'enaia' > "$ROOT/.title"; rm -rf "$WORKDIR"
+CMUX_SENTINEL_NOTIFY_CMD='exit 7' firet PreToolUse "$PID2" AskUserQuestion
+ck "a failing notifier still leaves ❓" "❓enaia"
+
+# Unset = completely off, the default for everyone who never opts in.
+unset CMUX_SENTINEL_NOTIFY_CMD
+fire Stop "$PID2"; printf 'enaia' > "$ROOT/.title"; rm -rf "$WORKDIR"; rm -f "$NOTED"
+firet PreToolUse "$PID2" AskUserQuestion; ck "no notifier configured → ❓ unchanged" "❓enaia"
+sleep 0.2
+cknote "unset notifier writes nothing" "$([ -e "$NOTED" ] && echo present || echo absent)" "absent"
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -110,6 +110,7 @@ USAGE_PROVIDERS="claude" bash "$SETUP" >/dev/null 2>&1; ck "exit 0" [ "$?" = 0 ]
 ck  "created 5h"  created 5h
 ck  "created 7d"  created 7d
 ckn "did not create cx5h (codex disabled)" created cx5h
+ckn "did not create m7d (per-model meter is opt-in)" created m7d
 ck  "exactly 2 created" [ "$(ncreated)" = 2 ]
 
 echo "T2: providers=\"claude codex\" → creates all four"
@@ -178,6 +179,45 @@ ampo
 USAGE_PROVIDERS="amp" AMP_ORB_METER=1 AMP_POLLER="$ROOT/bin/poller" bash "$SETUP" >/dev/null 2>&1
 ck "created ampu with orb opt-in" created ampu
 ck "created ampo with orb opt-in" created ampo
+
+# The per-model Claude cap follows the SAME local-opt-in policy as the orb meter:
+# the flag is the user's positive request, and the poller then says whether the
+# account actually has such a cap.
+echo "T2h: CLAUDE_MODEL_METER=1 + the account has a per-model cap → creates m7d"
+reset
+stub_poller '5h
+7d
+m7d
+'
+USAGE_PROVIDERS="claude" CLAUDE_MODEL_METER=1 CLAUDE_POLLER="$ROOT/bin/poller" bash "$SETUP" >/dev/null 2>&1
+ck "created 5h" created 5h
+ck "created 7d" created 7d
+ck "created m7d with the model-meter opt-in" created m7d
+
+echo "T2i: opted in but the account has NO per-model cap → m7d skipped"
+reset
+stub_poller '5h
+7d
+'
+out=$(USAGE_PROVIDERS="claude" CLAUDE_MODEL_METER=1 CLAUDE_POLLER="$ROOT/bin/poller" bash "$SETUP" 2>&1)
+ckn "did not create a permanently-n/a m7d row" created m7d
+ckhas "explains the skip" "$out" "skipping 'm7d'"
+ck  "the account-wide meters are unaffected" created 7d
+
+echo "T2j: opted in but the poller can't tell → FAILS OPEN, creates m7d"
+reset
+stub_poller ''
+USAGE_PROVIDERS="claude" CLAUDE_MODEL_METER=1 CLAUDE_POLLER="$ROOT/bin/poller" bash "$SETUP" >/dev/null 2>&1
+ck "created m7d (silence must never suppress an explicitly requested meter)" created m7d
+
+echo "T2k: a live per-model cap without the opt-in still creates nothing"
+reset
+stub_poller '5h
+7d
+m7d
+'
+USAGE_PROVIDERS="claude" CLAUDE_POLLER="$ROOT/bin/poller" bash "$SETUP" >/dev/null 2>&1
+ckn "the cap existing is not consent to spend a ⌘ key on it" created m7d
 rm -f "$ROOT/bin/poller"
 
 echo "T3: idempotent — existing sentinels are left alone"

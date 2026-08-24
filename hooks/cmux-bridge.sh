@@ -210,6 +210,33 @@ _set_working() {
   : > "$dir/.marked"
 }
 
+# Out-of-window alert on the ❓ transition (OPT-IN, empty = off).
+#
+# This is the one moment worth interrupting someone for: an agent is alive but
+# parked on YOU. Everything else — working, idle, finished — is passive status you
+# read off the sidebar when you look, which is exactly why the ✅ "done" marker was
+# rejected (see CLAUDE.md). So there is deliberately no notification for any other
+# transition; adding one would make the alert ignorable, which costs you the ❓.
+#
+# Fires from _set_waiting AFTER its already-waiting guard, so you get exactly one
+# alert per transition into ❓, not one per hook event.
+#
+# Contract: CMUX_SENTINEL_NOTIFY_CMD runs via `sh -c` with the workspace label as
+# $1 and the event as $2, and CMUX_SENTINEL_WORKSPACE / _EVENT in the environment.
+#   export CMUX_SENTINEL_NOTIFY_CMD='curl -sfd "$1 needs you" ntfy.sh/YOUR-TOPIC'
+#
+# DETACHED with output discarded, on purpose: this runs on the agent's hot path
+# (a hook, before a tool call), so a notifier that blocks — curl to an unreachable
+# host — or fails must never stall a turn or break the marker. Consequence to
+# accept: a notifier that hangs forever leaks one process; keep it a quick fire.
+NOTIFY_CMD="${CMUX_SENTINEL_NOTIFY_CMD:-}"
+_notify() { # $1 = event  $2 = workspace label
+  [ -n "$NOTIFY_CMD" ] || return 0
+  ( CMUX_SENTINEL_EVENT="$1" CMUX_SENTINEL_WORKSPACE="$2" \
+      sh -c "$NOTIFY_CMD" cmux-sentinel-notify "$2" "$1" >/dev/null 2>&1 & )
+  return 0
+}
+
 # Mark THIS session waiting-on-you (asked a question / needs a permission): swap
 # ⚡→❓. The session stays alive (its pid file remains) but is BLOCKED, so waiting
 # outranks working until the user responds. Compacting still wins. No .marked
@@ -224,6 +251,7 @@ _set_waiting() {
   t=$(_title_of "$ws"); [ -n "$t" ] || return 0
   case "$t" in "$COMPMARK"* | "$WAITMARK"*) return 0 ;; esac  # compacting wins; already waiting
   cmux rename-workspace --workspace "$ws" "${WAITMARK}$(_strip_marks "$t")" &>/dev/null
+  _notify waiting "$(_strip_marks "$t")"   # past the guard = a real transition into ❓
 }
 
 # Notification-gated waiting. The Notification hook fires for TWO unrelated things:

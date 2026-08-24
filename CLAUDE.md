@@ -200,6 +200,7 @@ cmux sidebar validate workspaces && cmux sidebar reload   # synthetic interpreta
 ./bin/cmux-claude-usage.sh --print     # parsed values
 ./bin/cmux-claude-usage.sh --raw       # raw API JSON (no token)
 ./bin/cmux-claude-usage.sh --update    # writes title fallback + native progress
+./bin/cmux-claude-usage.sh --buckets   # which labels have live data (fails open); drives setup
 ./bin/cmux-codex-usage.sh --print      # Codex: live utilization via account/rateLimits/read
 ./bin/cmux-codex-usage.sh --raw        # normalized JSON; account-scoped reset-credit ids removed
 ./bin/cmux-codex-usage.sh --raw-full   # complete account-private JSON — inspect locally only
@@ -215,16 +216,16 @@ cmux sidebar validate workspaces && cmux sidebar reload   # synthetic interpreta
 make sidebar-live                     # mount repo sidebar against live data; human visual verdict
 
 # offline tests (stub cmux/security/curl/$HOME — run in CI too)
-make test   # bridge-state(49) poller-gate(55) codex-poller(83) install-hooks(52) sentinel-setup(52)
-            # sentinel-doctor(36) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
-            # amp-bridge(43) amp-poller(49) = 504 assertions total
+make test   # bridge-state(58) poller-gate(86) codex-poller(83) install-hooks(52) sentinel-setup(61)
+            # sentinel-doctor(39) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
+            # amp-bridge(43) amp-poller(49) = 556 assertions total
 ```
 
 ## Architecture / where things live
 
 ```text
 sidebars/workspaces.swift  the sidebar. isClaudeMeter()/isCodexMeter()/isAmpMeter() = title-label `.hasPrefix` per provider; isUsageMeter() = any.
-bin/cmux-claude-usage.sh    Claude usage poller. make_bar / sev_dot / mark_offline / bucket_field / to_pct / resolve_ref(+_paint, multi-window).
+bin/cmux-claude-usage.sh    Claude usage poller. scoped_weekly (per-model cap, opt-in m7d) + response cache. make_bar / sev_dot / mark_offline / bucket_field / to_pct / resolve_ref(+_paint, multi-window).
 bin/cmux-codex-usage.sh     Codex usage poller (short-lived account/rateLimits/read app-server RPC; Codex owns auth/refresh). Default meter + read-only named limits/reset credits; sanitized --raw / local-only --raw-full; actionable RPC failure classes; --buckets drives setup.
 bin/cmux-amp-usage.sh       Amp usage poller (scrapes `amp usage` PROSE — no --json). Monthly allowance, not windows. REMAINING→USED inversion. ampu (agent) + ampo (orb, opt-in AMP_ORB_METER=1).
 bin/cmux-sentinel-setup.sh  idempotent sentinel creation (per USAGE_PROVIDERS; known-live buckets only, fail-open on unknown) + auto-naming guard probe + ⌘N shortcut layout (layout/sentinel_window/JQ_NUMBERED, --no-layout).
@@ -275,6 +276,18 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
   `tests/bridge-state.sh` K–K5 (back-dated with `touch -t CCYYMMDDhhmm`, the one form both BSD and
   GNU accept, so the block needs no sleeps).
 
+- **The ❓ transition is the ONLY notifiable event** (`CMUX_SENTINEL_NOTIFY_CMD`, opt-in, empty
+  = off). An agent that is alive but parked on YOU is the one state worth interrupting someone
+  out-of-window for; working/idle/finished are passive status you read off the sidebar when you
+  look — which is exactly why the ✅ "done" marker was rejected. Adding a second notifiable
+  event would make the alert ignorable and cost you the ❓, so don't. It fires from
+  `_set_waiting` AFTER the already-waiting guard (one alert per transition, not per hook event),
+  runs `sh -c "$CMUX_SENTINEL_NOTIFY_CMD"` with the workspace label as `$1` / the event as `$2`
+  (also `CMUX_SENTINEL_WORKSPACE` / `_EVENT` in the env), and is **detached with output
+  discarded on purpose**: this is the agent's hot path, so a notifier that blocks or fails must
+  never stall a turn or break the marker. The accepted cost is that a notifier which hangs
+  forever leaks one process — keep it a quick fire (`curl -sf`, `terminal-notifier`).
+  Covered by `tests/bridge-state.sh` block L.
 - **Amp agent state needs OUR OWN plugin — cmux's native amp integration cannot light up this
   sidebar.** `cmux hooks amp install` writes `~/.config/amp/plugins/cmux-session.ts`, which reports
   state with `cmux set-status` → native-sidebar pills only (see the set-status bullet above). So
@@ -360,6 +373,32 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
   most people never run orbs, so metering it by default would cost a real ⌘ key for an unused row.
   `provider_available()` checks the binary plus a non-empty
   `~/.local/share/amp/secrets.json` — it never reads the file, which holds credentials.
+- **Anthropic publishes a per-MODEL weekly cap; it is metered only on request (`m7d`).**
+  Alongside `five_hour`/`seven_day` the payload carries a modern self-describing
+  `limits[]` array whose `kind == "weekly_scoped"` row is a model-scoped allowance
+  (`scope.model.display_name` = "Fable" today). Three rules, each of which is a trap:
+  **(1) the two working meters keep reading the legacy top-level buckets** — `limits[]` is
+  parsed ONLY for the new row, because adding a feature must never put a proven meter at risk.
+  **(2) never hardcode the model name.** `scope.model.id` is `null`, so `display_name` is the
+  only handle, and Anthropic re-scopes which model is capped at will. The name therefore rides
+  the title's DETAIL text (`m7d |Fable 15% (3d 21h)|▉…`), never the anchor — the sidebar anchor
+  has to be a static `.hasPrefix` literal. **(3) `seven_day_opus`/`seven_day_sonnet` exist as
+  top-level keys and are `null`** — reading those is exactly the "renders empty ≠ unreachable"
+  mistake this file keeps warning about; a non-null `weekly_scoped` row is the only proof.
+  Off by default (`CLAUDE_MODEL_METER=1`) for the same reason as the Amp orb meter: the sentinel
+  is an ordinary workspace and costs one of the ⌘1…⌘9 keys. `--print` shows the row (and how to
+  turn it on) whether or not it is metered, so discovering it never requires opting in first.
+  `--buckets` was added to the Claude poller for setup's `ensure_live`, with the same fail-open
+  contract as Codex/Amp: it lists `5h`/`7d` always and adds `m7d` only when opted in AND the cap
+  is live — silence never suppresses. Opted in with no cap → the row paints an honest `n/a`
+  rather than a fabricated 0%, and does NOT fail (Anthropic adds and drops these).
+- **The usage poller caches its last good response (`CMUX_SENTINEL_USAGE_CACHE_TTL`, default
+  60s).** The documented way to use this tool — `--print` to look, then `--update` to paint — was
+  two API calls seconds apart on top of the 5-minute launchd poll, and that burst is what trips
+  the endpoint's 429. Only SUCCESSES are cached: a failed response must stay visible as
+  `⚠ rate limit`/`⚠ auth` and the next poll must retry the network, never replay the error.
+  `TTL=0` disables it. Cache file is `$USAGE_STATE_DIR/<provider>.last-response.json`, mode 600
+  (it is an account-scoped usage body — treat it like `--raw-full`).
 - **A provider may not HAVE a window we model — and a dead meter is NOT free.** A sentinel is
   an ordinary workspace, so a permanently-`n/a` row still eats one of the ⌘1…⌘9 keys to show
   nothing. OpenAI dropped the **5h window for Codex Pro** — confirmed permanent 2026-07-16

@@ -303,6 +303,43 @@ logins are not covered by this account allowance. A stored login does not prove 
 works: the doctor also runs the live capability RPC and gives the exact `codex logout` → `codex
 login` recovery when reauthentication is required.
 
+### Get alerted when an agent needs you (optional)
+
+The sidebar shows ❓ when a session is alive but blocked on you — it asked a question or is
+waiting on a permission. That is the one state worth interrupting you for when you are not
+looking at cmux, so the bridge can run a command on that transition:
+
+```bash
+# in ~/.zshrc, or wherever the agent's environment comes from
+export CMUX_SENTINEL_NOTIFY_CMD='terminal-notifier -title "cmux" -message "$1 needs you"'
+# or a phone push:
+export CMUX_SENTINEL_NOTIFY_CMD='curl -sfd "$1 needs you" ntfy.sh/YOUR-TOPIC'
+```
+
+The command gets the workspace label as `$1` and the event as `$2` (and the same values as
+`CMUX_SENTINEL_WORKSPACE` / `CMUX_SENTINEL_EVENT`). It fires once per transition into ❓, not once
+per hook event. It runs detached with its output discarded — it is on the agent's hot path, so a
+notifier that hangs or fails can never stall a turn; keep it a quick fire. Nothing else is
+notifiable by design: an alert you get for every state change is an alert you learn to ignore.
+
+### Meter a per-model weekly cap (optional)
+
+Anthropic publishes a per-model weekly cap alongside the account-wide `5h`/`7d` windows — today a
+Fable-scoped one. `~/bin/cmux-claude-usage.sh --print` always shows it if your account has one:
+
+```text
+5h  25%  · resets 2h 27m  (2026-08-24T14:59:59+00:00)
+7d  13%  · resets 3d 21h  (2026-08-28T09:59:59+00:00)
+m7d 15%  · resets 3d 21h  (2026-08-28T09:59:59+00:00)  [Fable-scoped weekly cap; set CLAUDE_MODEL_METER=1 to meter it]
+```
+
+Metering it is opt-in (`CLAUDE_MODEL_METER=1`, then re-run `~/bin/cmux-sentinel-setup.sh`) because
+the extra sentinel costs one of the ⌘1…⌘9 keys — the same rule that keeps the Amp orb meter off by
+default. The row renders as `m7d |Fable 15% (3d 21h)|██░░░░░░░░░░░░`: the label is a fixed anchor
+the sidebar matches on, and the model name comes from the payload, so it follows Anthropic if they
+re-scope the cap to a different model. If your account has no such cap, setup skips the sentinel
+rather than parking a permanently-`n/a` row.
+
 ### Enable the Amp provider
 
 1. Add `amp` to `USAGE_PROVIDERS` (for example `"claude codex amp"`).

@@ -35,6 +35,7 @@
 #   --print     fetch + print parsed values (verification; no cmux writes)
 #   --raw       fetch + print raw JSON (token NOT included)
 #   --update    fetch + rename both sentinel workspaces with bars (for launchd)
+#   --buckets   print the labels that have LIVE data (drives setup; fails open)
 #
 # Provider gating (which usage meters show, robustly): a provider's panel shows in
 # the sidebar IFF its sentinels exist, and the sidebar hides any provider with
@@ -72,6 +73,13 @@ SENTINELS_ENV="$HOME/.config/cmux/usage-sentinels.env"
 [ -f "$SENTINELS_ENV" ] && source "$SENTINELS_ENV"
 LABEL_5H="${SENTINEL_5H_LABEL:-5h}"
 LABEL_7D="${SENTINEL_7D_LABEL:-7d}"
+# Per-MODEL weekly meter (e.g. a Fable-scoped weekly cap). OPT-IN, off by default:
+# a sentinel is an ordinary workspace, so this row costs one of the ⌘1…⌘9 keys —
+# same rule that keeps the Amp orb meter behind AMP_ORB_METER. The label is fixed
+# because the sidebar's .hasPrefix anchors must be static; the MODEL NAME comes
+# from the payload at paint time, so an Opus-scoped account labels itself correctly.
+LABEL_M7D="${SENTINEL_M7D_LABEL:-m7d}"
+MODEL_METER="${CLAUDE_MODEL_METER:-0}"
 
 # This poller's provider id and the enabled set. Default "claude" so it works
 # zero-config; drop "claude" from USAGE_PROVIDERS to disable it without touching
@@ -223,8 +231,45 @@ read_token() {
 # from which no assignment escapes.
 FETCH_OK=0; FETCH_AUTH=2; FETCH_RATE=3; FETCH_SERVER=4; FETCH_NET=5; FETCH_HTTP=6
 
+# Short-lived response cache. Every invocation is its own API call, so the natural
+# way to use this tool — `--print` to look, then `--update` to paint — hits the
+# endpoint TWICE within seconds, on top of the 5-minute launchd poll. That burst is
+# what trips 429 (19 of them in one machine's log, and a second user hit one live
+# doing exactly print-then-update). launchd's own 300s interval is far outside this
+# TTL, so the daemon is unaffected — this only collapses human bursts.
+#
+# Cached is the RAW body of a validated 200. Failures are never cached: a 429 must
+# stay visible as ⚠ rate limit rather than being papered over with stale numbers.
+CACHE_TTL="${CMUX_SENTINEL_USAGE_CACHE_TTL:-60}"   # 0 disables
+CACHE_FILE="$USAGE_STATE_DIR/$PROVIDER_ID.last-response.json"
+
+_cache_read() {
+  [ "${CACHE_TTL:-0}" -gt 0 ] 2>/dev/null || return 1
+  [ -f "$CACHE_FILE" ] || return 1
+  local mtime now
+  mtime=$(stat -f %m "$CACHE_FILE" 2>/dev/null || stat -c %Y "$CACHE_FILE" 2>/dev/null) || return 1
+  now=$(date +%s)
+  case "$mtime" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$(( now - mtime ))" -lt "$CACHE_TTL" ] || return 1
+  cat "$CACHE_FILE" 2>/dev/null
+}
+
+_cache_write() {
+  [ "${CACHE_TTL:-0}" -gt 0 ] 2>/dev/null || return 0
+  local tmp
+  mkdir -p "$USAGE_STATE_DIR" 2>/dev/null || return 0
+  tmp=$(mktemp "$USAGE_STATE_DIR/.resp.XXXXXX") || return 0
+  # 600: this is an account-scoped usage body, same class as --raw-full.
+  if printf '%s' "$1" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$CACHE_FILE"; then
+    return 0
+  fi
+  rm -f "$tmp"
+  return 0
+}
+
 fetch_usage() { # $1 = token. Prints the body on success; else returns a FETCH_* class.
-  local out rc code body
+  local out rc code body cached
+  cached=$(_cache_read) && [ -n "$cached" ] && { printf '%s' "$cached"; return "$FETCH_OK"; }
   # No -f: a 4xx must still yield its STATUS so it can be classified. The body of a
   # failed response is deliberately never printed or logged (same rule as the Codex
   # poller) — only the code is.
@@ -242,9 +287,9 @@ fetch_usage() { # $1 = token. Prints the body on success; else returns a FETCH_*
     *) code=""; body="$out" ;;
   esac
   case "$code" in
-    ''|000)  [ "$rc" -eq 0 ] && { printf '%s' "$body"; return "$FETCH_OK"; }
+    ''|000)  [ "$rc" -eq 0 ] && { _cache_write "$body"; printf '%s' "$body"; return "$FETCH_OK"; }
              return "$FETCH_NET" ;;
-    2??)     printf '%s' "$body"; return "$FETCH_OK" ;;
+    2??)     _cache_write "$body"; printf '%s' "$body"; return "$FETCH_OK" ;;
   esac
   # The status is useful in the launchd log; the response BODY never is (and could
   # carry account detail), so only the code is ever emitted.
@@ -321,9 +366,35 @@ mark_offline() {
   cmux ping &>/dev/null || return 0
   _paint "$LABEL_5H" "$LABEL_5H |⚠ ${reason}|" >/dev/null 2>&1 || true
   _paint "$LABEL_7D" "$LABEL_7D |⚠ ${reason}|" >/dev/null 2>&1 || true
+  [ "$MODEL_METER" = 1 ] && _paint "$LABEL_M7D" "$LABEL_M7D |⚠ ${reason}|" >/dev/null 2>&1
   # Drop any stale native bar so the "⚠ offline" title shows through (else the
   # sidebar keeps drawing the last good ProgressView on top of an offline title).
   _clear_progress "$LABEL_5H"; _clear_progress "$LABEL_7D"
+  [ "$MODEL_METER" = 1 ] && _clear_progress "$LABEL_M7D"
+  return 0
+}
+
+# The endpoint also returns a modern, self-describing `limits[]` array alongside the
+# legacy top-level buckets: {kind, group, percent, severity, resets_at, scope}. The
+# two existing meters deliberately keep reading five_hour/seven_day — that path is
+# proven and adding a feature must not put a working meter at risk — so this reads
+# `limits[]` ONLY for the per-model row, which has no legacy equivalent.
+#
+# NOTE the trap this walks past: `seven_day_opus` / `seven_day_sonnet` exist as
+# top-level keys and are null here. Per CLAUDE.md, an empty read is never evidence
+# of absence — the proof that per-model data is live is a non-null weekly_scoped
+# row, which is what this parses. Never hardcode a model name: scope.model.id is
+# null, so display_name is the only handle, and it differs per account.
+# Prints "pct<TAB>resets_at<TAB>model_name", or nothing when there is no such row.
+scoped_weekly() { # $1 = json
+  printf '%s' "$1" | jq -r '
+    (.limits // [])
+    | map(select((.kind == "weekly_scoped") and ((.percent | type) == "number")))
+    | first // empty
+    | [ (.percent | tostring),
+        (.resets_at // ""),
+        (.scope.model.display_name // "model") ]
+    | @tsv' 2>/dev/null
 }
 
 # pull a bucket field, snake_case w/ camelCase fallback
@@ -414,9 +485,33 @@ main() {
   sd_pct=$(to_pct "$sd_pct")
   fh_human=$(humanize_until "$fh_epoch"); sd_human=$(humanize_until "$sd_epoch")
 
+  # Per-model weekly row (opt-in). Parsed for --print and --buckets regardless of
+  # the flag so `--print` can TELL you the row exists and is worth opting into.
+  local m_pct="" m_reset="" m_name="" m_epoch m_human="" scoped
+  scoped=$(scoped_weekly "$json")
+  if [ -n "$scoped" ]; then
+    m_pct=$(printf '%s' "$scoped" | cut -f1)
+    m_reset=$(printf '%s' "$scoped" | cut -f2)
+    m_name=$(printf '%s' "$scoped" | cut -f3)
+    m_pct=$(to_pct "$m_pct")
+    m_epoch=$(iso_to_epoch "$m_reset"); m_human=$(humanize_until "$m_epoch")
+  fi
+
+  # Which labels have LIVE data, for cmux-sentinel-setup.sh. Same contract as the
+  # Codex/Amp pollers: a POSITIVE answer may suppress a sentinel, silence never
+  # may — every can't-tell path above already exited before reaching here.
+  if [ "$mode" = "--buckets" ]; then
+    printf '%s\n' "$LABEL_5H" "$LABEL_7D"
+    [ "$MODEL_METER" = 1 ] && [ -n "$m_pct" ] && printf '%s\n' "$LABEL_M7D"
+    return 0
+  fi
+
   if [ "$mode" = "--print" ]; then
     echo "5h  ${fh_pct}%  · resets ${fh_human}  (${fh_reset})"
     echo "7d  ${sd_pct}%  · resets ${sd_human}  (${sd_reset})"
+    if [ -n "$m_pct" ]; then
+      echo "m7d ${m_pct}%  · resets ${m_human}  (${m_reset})  [${m_name}-scoped weekly cap$([ "$MODEL_METER" = 1 ] || printf '%s' '; set CLAUDE_MODEL_METER=1 to meter it')]"
+    fi
     return
   fi
 
@@ -450,6 +545,25 @@ main() {
       && { painted=$((painted + 1)); wrote="${wrote}${LABEL_5H}=${fh_pct}% (${fh_human})  "; }
     paint_meter "$LABEL_7D" "$LABEL_7D |${sd_lbl}|${sd_bar}" "$sd_frac" "$sd_lbl" \
       && { painted=$((painted + 1)); wrote="${wrote}${LABEL_7D}=${sd_pct}% (${sd_human})  "; }
+    if [ "$MODEL_METER" = 1 ]; then
+      if [ -n "$m_pct" ]; then
+        # The MODEL NAME rides the detail text, never the anchor: the anchor has to
+        # be a static .hasPrefix literal in the sidebar, and Anthropic can rename or
+        # re-scope the capped model at will (scope.model.id is null — display_name
+        # is the only handle there is).
+        local m_bar m_dot m_frac m_lbl
+        m_bar=$(make_bar "$m_pct" 14); m_dot=$(sev_dot "$m_pct"); m_frac=$(to_frac "$m_pct")
+        m_lbl="${m_name} ${m_pct}% (${m_human})${m_dot}"
+        paint_meter "$LABEL_M7D" "$LABEL_M7D |${m_lbl}|${m_bar}" "$m_frac" "$m_lbl" \
+          && { painted=$((painted + 1)); wrote="${wrote}${LABEL_M7D}=${m_pct}% (${m_human})  "; }
+      else
+        # Opted in, but this account currently has no model-scoped cap. Not an error
+        # (Anthropic adds and drops these), so don't die — just make the row honest
+        # instead of leaving yesterday's bar frozen on it.
+        _paint "$LABEL_M7D" "$LABEL_M7D |n/a|" >/dev/null 2>&1 || true
+        _clear_progress "$LABEL_M7D"
+      fi
+    fi
     # A REJECTED rename is a broken write path (socket dropped, ref went stale), not
     # a missing row — never claim freshness for it.
     [ "${#REJECTED[@]}" -gt 0 ] && die "cmux rejected the rename for: ${REJECTED[*]}"
@@ -466,7 +580,7 @@ main() {
     return 0
   fi
 
-  die "unknown mode '$mode' (use --print | --raw | --update)"
+  die "unknown mode '$mode' (use --print | --raw | --update | --buckets)"
 }
 
 main "$@"
