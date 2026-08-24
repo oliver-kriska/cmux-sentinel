@@ -38,6 +38,7 @@ SENTINELS_ENV="$CFG/usage-sentinels.env"
 [ -f "$SENTINELS_ENV" ] && . "$SENTINELS_ENV"
 LABEL_5H="${SENTINEL_5H_LABEL:-5h}";   LABEL_7D="${SENTINEL_7D_LABEL:-7d}"
 LABEL_M7D="${SENTINEL_M7D_LABEL:-m7d}"
+LABEL_SPEND="${SENTINEL_SPEND_LABEL:-spend}"
 LABEL_CX5H="${SENTINEL_CX5H_LABEL:-cx5h}"; LABEL_CX7D="${SENTINEL_CX7D_LABEL:-cx7d}"
 LABEL_AMPU="${SENTINEL_AMPU_LABEL:-ampu}"; LABEL_AMPO="${SENTINEL_AMPO_LABEL:-ampo}"
 PROVIDERS="${USAGE_PROVIDERS:-claude}"
@@ -107,10 +108,15 @@ case " $PROVIDERS " in *" claude "*)
   # row costs one of the ⌘1…⌘9 keys, and most accounts don't watch a second cap.
   # The two normal meters deliberately stay on plain `ensure` — asking the poller
   # must never be able to suppress a proven-working meter.
+  cl_live=$(live_buckets "$CLAUDE_POLLER")
   if [ "${CLAUDE_MODEL_METER:-0}" = 1 ]; then
-    cl_live=$(live_buckets "$CLAUDE_POLLER")
     ensure_live "$LABEL_M7D" "Claude per-model weekly meter — managed by cmux-claude-usage.sh; leave idle" "$cl_live"
   fi
+  # Extra-usage SPEND. Created whenever the account has an overage budget — a stable
+  # account property, NOT the balance. This is the one meter with no opt-in flag,
+  # because the sidebar hides the row while the balance is zero: it costs nothing to
+  # look at, and a flag you never set could never warn you about an unexpected charge.
+  ensure_live "$LABEL_SPEND" "Claude extra-usage spend meter — managed by cmux-claude-usage.sh; leave idle" "$cl_live"
   ;; esac
 case " $PROVIDERS " in *" codex "*)
   cx_live=$(live_buckets "$CODEX_POLLER")
@@ -156,7 +162,7 @@ case " $PROVIDERS " in *" amp "*)
 # Every label the sidebar hides — including disabled providers' leftovers, which
 # still exist as workspaces and still eat ⌘ keys. Array, not a string: a label is
 # user-configurable and could contain a space.
-ALL_LABELS=("$LABEL_5H" "$LABEL_7D" "$LABEL_M7D" "$LABEL_CX5H" "$LABEL_CX7D" "$LABEL_AMPU" "$LABEL_AMPO")
+ALL_LABELS=("$LABEL_5H" "$LABEL_7D" "$LABEL_M7D" "$LABEL_SPEND" "$LABEL_CX5H" "$LABEL_CX7D" "$LABEL_AMPU" "$LABEL_AMPO")
 labels_json() { printf '%s\n' "${ALL_LABELS[@]}" | jq -R . | jq -s .; }
 
 ws_json() { # $1 = window ("" = default)

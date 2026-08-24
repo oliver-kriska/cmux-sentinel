@@ -80,6 +80,13 @@ LABEL_7D="${SENTINEL_7D_LABEL:-7d}"
 # from the payload at paint time, so an Opus-scoped account labels itself correctly.
 LABEL_M7D="${SENTINEL_M7D_LABEL:-m7d}"
 MODEL_METER="${CLAUDE_MODEL_METER:-0}"
+# Extra-usage (overage) spend meter. NOT opt-in, unlike every other optional row —
+# and that is deliberate. The opt-in rule exists because a dead meter still costs a
+# ⌘ key to show nothing; this row costs nothing to LOOK at, because the sidebar
+# hides it entirely while the spend is zero. It also has to be on by default to do
+# its job at all: the whole point is to catch money you did NOT expect to be
+# spending, which a flag you never set can't do.
+LABEL_SPEND="${SENTINEL_SPEND_LABEL:-spend}"
 
 # This poller's provider id and the enabled set. Default "claude" so it works
 # zero-config; drop "claude" from USAGE_PROVIDERS to disable it without touching
@@ -367,10 +374,12 @@ mark_offline() {
   _paint "$LABEL_5H" "$LABEL_5H |⚠ ${reason}|" >/dev/null 2>&1 || true
   _paint "$LABEL_7D" "$LABEL_7D |⚠ ${reason}|" >/dev/null 2>&1 || true
   [ "$MODEL_METER" = 1 ] && _paint "$LABEL_M7D" "$LABEL_M7D |⚠ ${reason}|" >/dev/null 2>&1
+  _paint "$LABEL_SPEND" "$LABEL_SPEND |⚠ ${reason}|" >/dev/null 2>&1 || true
   # Drop any stale native bar so the "⚠ offline" title shows through (else the
   # sidebar keeps drawing the last good ProgressView on top of an offline title).
   _clear_progress "$LABEL_5H"; _clear_progress "$LABEL_7D"
   [ "$MODEL_METER" = 1 ] && _clear_progress "$LABEL_M7D"
+  _clear_progress "$LABEL_SPEND"
   return 0
 }
 
@@ -395,6 +404,48 @@ scoped_weekly() { # $1 = json
         (.resets_at // ""),
         (.scope.model.display_name // "model") ]
     | @tsv' 2>/dev/null
+}
+
+# `spend` is the account's extra-usage (overage) budget. It carries BOTH a used
+# amount and a limit — unlike a bare credit balance, which is why the Amp `$`
+# balance is deliberately not metered — so it has an honest 0-100% bar, and it even
+# ships its own `percent`. (`extra_usage.utilization` sitting right next to it is
+# null: read the wrong one and you'd conclude the data isn't there. Same trap as
+# seven_day_opus.) Prints "pct<TAB>used_minor<TAB>limit_minor<TAB>exponent<TAB>currency",
+# or nothing when the account has no such budget.
+spend_row() { # $1 = json
+  printf '%s' "$1" | jq -r '
+    (.spend // empty)
+    | select((.enabled // true) != false)
+    | select((.used.amount_minor | type) == "number")
+    | select((.limit.amount_minor | type) == "number")
+    | select(.limit.amount_minor > 0)
+    | [ ((.percent // 0) | tostring),
+        (.used.amount_minor | tostring),
+        (.limit.amount_minor | tostring),
+        ((.used.exponent // 2) | tostring),
+        (.used.currency // "") ]
+    | @tsv' 2>/dev/null
+}
+
+# minor units → display string. Never GUESS a symbol for a currency we don't know:
+# an unrecognised code is printed as the code itself, which is unambiguous
+# everywhere. ASCII-led output is not possible here (the symbol leads), which is
+# fine — the coalescer rule applies to the progress LABEL, and that starts with the
+# percentage.
+fmt_money() { # $1 = amount_minor  $2 = exponent  $3 = currency code
+  local m="${1:-0}" e="${2:-2}" sym div=1 i=0
+  case "$m" in ''|*[!0-9-]*) m=0 ;; esac
+  [ "$m" -lt 0 ] && m=0
+  case "$e" in ''|*[!0-9]*) e=2 ;; esac
+  case "$3" in
+    EUR) sym="€" ;; USD) sym="$" ;; GBP) sym="£" ;;
+    "")  sym="" ;;
+    *)   sym="$3 " ;;
+  esac
+  while [ "$i" -lt "$e" ]; do div=$((div * 10)); i=$((i + 1)); done
+  if [ "$e" -gt 0 ]; then printf '%s' "$sym"; printf "%d.%0${e}d" "$((m / div))" "$((m % div))"
+  else printf '%s%d' "$sym" "$m"; fi
 }
 
 # pull a bucket field, snake_case w/ camelCase fallback
@@ -497,18 +548,41 @@ main() {
     m_epoch=$(iso_to_epoch "$m_reset"); m_human=$(humanize_until "$m_epoch")
   fi
 
+  local sp_pct="" sp_used="" sp_limit="" sp_exp="" sp_cur="" sp_row sp_used_txt="" sp_limit_txt=""
+  sp_row=$(spend_row "$json")
+  if [ -n "$sp_row" ]; then
+    sp_pct=$(printf '%s' "$sp_row" | cut -f1)
+    sp_used=$(printf '%s' "$sp_row" | cut -f2)
+    sp_limit=$(printf '%s' "$sp_row" | cut -f3)
+    sp_exp=$(printf '%s' "$sp_row" | cut -f4)
+    sp_cur=$(printf '%s' "$sp_row" | cut -f5)
+    sp_pct=$(to_pct "$sp_pct")
+    sp_used_txt=$(fmt_money "$sp_used" "$sp_exp" "$sp_cur")
+    sp_limit_txt=$(fmt_money "$sp_limit" "$sp_exp" "$sp_cur")
+  fi
+
   # Which labels have LIVE data, for cmux-sentinel-setup.sh. Same contract as the
   # Codex/Amp pollers: a POSITIVE answer may suppress a sentinel, silence never
   # may — every can't-tell path above already exited before reaching here.
   if [ "$mode" = "--buckets" ]; then
     printf '%s\n' "$LABEL_5H" "$LABEL_7D"
     [ "$MODEL_METER" = 1 ] && [ -n "$m_pct" ] && printf '%s\n' "$LABEL_M7D"
+    # The spend sentinel is created whenever the account HAS an overage budget — a
+    # stable account property, not the fluctuating balance. Gating creation on
+    # "spent > 0" would mean the meter can only appear after someone re-runs setup,
+    # i.e. exactly never, since nobody re-runs setup because they suspect a charge.
+    # The ZERO case is handled at render time instead: the row paints a `none`
+    # marker and the sidebar hides it.
+    [ -n "$sp_pct" ] && printf '%s\n' "$LABEL_SPEND"
     return 0
   fi
 
   if [ "$mode" = "--print" ]; then
     echo "5h  ${fh_pct}%  · resets ${fh_human}  (${fh_reset})"
     echo "7d  ${sd_pct}%  · resets ${sd_human}  (${sd_reset})"
+    if [ -n "$sp_pct" ]; then
+      echo "spend ${sp_pct}%  · ${sp_used_txt} of ${sp_limit_txt} extra usage$([ "$sp_used" != 0 ] || printf '%s' '  [zero — the sidebar hides this row until you spend]')"
+    fi
     if [ -n "$m_pct" ]; then
       echo "m7d ${m_pct}%  · resets ${m_human}  (${m_reset})  [${m_name}-scoped weekly cap$([ "$MODEL_METER" = 1 ] || printf '%s' '; set CLAUDE_MODEL_METER=1 to meter it')]"
     fi
@@ -563,6 +637,25 @@ main() {
         _paint "$LABEL_M7D" "$LABEL_M7D |n/a|" >/dev/null 2>&1 || true
         _clear_progress "$LABEL_M7D"
       fi
+    fi
+    if [ -n "$sp_pct" ]; then
+      if [ "$sp_used" != 0 ]; then
+        local sp_bar sp_dot sp_frac sp_lbl
+        sp_bar=$(make_bar "$sp_pct" 14); sp_dot=$(sev_dot "$sp_pct"); sp_frac=$(to_frac "$sp_pct")
+        sp_lbl="${sp_pct}% (${sp_used_txt} of ${sp_limit_txt})${sp_dot}"
+        paint_meter "$LABEL_SPEND" "$LABEL_SPEND |${sp_lbl}|${sp_bar}" "$sp_frac" "$sp_lbl" \
+          && { painted=$((painted + 1)); wrote="${wrote}${LABEL_SPEND}=${sp_used_txt}  "; }
+      else
+        # Nothing spent: paint the marker the SIDEBAR keys on to hide the row, and
+        # drop the bar. Written every run so the row disappears by itself when the
+        # month rolls over, exactly as it appears by itself on the first charge.
+        _paint "$LABEL_SPEND" "$LABEL_SPEND |none|" >/dev/null 2>&1 || true
+        _clear_progress "$LABEL_SPEND"
+      fi
+    else
+      # No overage budget on this account at all.
+      _paint "$LABEL_SPEND" "$LABEL_SPEND |none|" >/dev/null 2>&1 || true
+      _clear_progress "$LABEL_SPEND"
     fi
     # A REJECTED rename is a broken write path (socket dropped, ref went stale), not
     # a missing row — never claim freshness for it.

@@ -303,6 +303,26 @@ logins are not covered by this account allowance. A stored login does not prove 
 works: the doctor also runs the live capability RPC and gives the exact `codex logout` → `codex
 login` recovery when reauthentication is required.
 
+### Extra-usage spend
+
+If your Claude account has an extra-usage (overage) budget, a `spend` row meters the money:
+
+```text
+spend |14% (€12.60 of €90.00)|██░░░░░░░░░░░░
+```
+
+**It hides itself until you actually spend something.** Money you haven't spent is not
+information, and a permanent `€0.00` row would train you to ignore the one row that matters the
+moment it moves. So the poller paints a marker while the balance is zero and the sidebar drops the
+row; the first charge makes it appear on its own, and the monthly reset makes it disappear again —
+no setup re-run, no flag.
+
+This is the only optional meter with no opt-in switch, and deliberately so: a row that costs
+nothing to look at doesn't need one, and a flag you never set could never warn you about a charge
+you didn't expect. The sentinel is created whenever the account *has* a budget (a stable property),
+not based on the balance. `~/bin/cmux-claude-usage.sh --print` always shows the figure, hidden row
+or not, so "why don't I see a spend row" has an answer.
+
 ### Get alerted when an agent needs you (optional)
 
 The sidebar shows ❓ when a session is alive but blocked on you — it asked a question or is

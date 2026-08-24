@@ -180,6 +180,29 @@ func isClaudeMeter(_ w) -> Bool {
   // Anthropic re-scopes which model is capped at will.
   if w.title == "m7d" { return true }           // bare bootstrap label
   if w.title.hasPrefix("m7d ") { return true }  // Claude — model-scoped weekly window
+  // Extra-usage (overage) SPEND. Not a time window — money against a monthly
+  // budget. Always a meter (so it never shows up in the normal workspace list),
+  // but the panel hides it while nothing has been spent; see isZeroSpend.
+  if w.title == "spend" { return true }           // bare bootstrap label
+  if w.title.hasPrefix("spend ") { return true }  // Claude — extra-usage spend
+  return false
+}
+// The spend row is the one meter that hides ITSELF. Money you haven't spent is not
+// information, and a permanent "€0.00" row would train you to ignore the very row
+// that matters when it finally moves. The poller writes this exact marker on every
+// run while the balance is zero (and a real bar the moment it isn't), so the row
+// appears and disappears on its own with no setup re-run and no flag.
+func isZeroSpend(_ w) -> Bool {
+  if w.title == "spend" { return true }                // created, never painted yet
+  if w.title.hasPrefix("spend |none|") { return true }  // painted, nothing spent
+  return false
+}
+// What the CLAUDE USAGE panel actually draws. Split from isClaudeMeter on purpose:
+// a hidden spend row must STILL count as a meter, or it would fall through into the
+// normal workspace list — visible in the one place we didn't want it.
+func isClaudePanelRow(_ w) -> Bool {
+  if isZeroSpend(w) { return false }
+  if isClaudeMeter(w) { return true }
   return false
 }
 // Codex provider — same shape as isClaudeMeter, distinct labels so the two never
@@ -493,10 +516,10 @@ VStack(alignment: .leading, spacing: 0) {
   // never a substring: a weekly countdown can itself contain "5h". The optional
   // m7d row has no rank of its own — it keeps workspace order, which puts it after
   // 7d because setup creates it last.
-  if workspaces.filter { isClaudeMeter($0) }.count > 0 {
+  if workspaces.filter { isClaudePanelRow($0) }.count > 0 {
     VStack(alignment: .leading, spacing: 6) {
       Text("CLAUDE USAGE").font(.system(size: 10, design: .monospaced)).bold().foregroundColor("#8A9199")
-      ForEach(workspaces.filter { isClaudeMeter($0) }.sorted { $0.title.hasPrefix("5h") && !$1.title.hasPrefix("5h") }) { w in
+      ForEach(workspaces.filter { isClaudePanelRow($0) }.sorted { $0.title.hasPrefix("5h") && !$1.title.hasPrefix("5h") }) { w in
         meterRow(w)
       }
     }

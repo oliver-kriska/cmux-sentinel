@@ -62,6 +62,17 @@ if [ -f sidebars/workspaces.swift ] \
   && ! grep -Eq 'w\.title\.hasPrefix\("m7d "\)' sidebars/workspaces.swift; then
   flag "sidebar is missing its per-model meter title anchor (w.title.hasPrefix)" "sidebars/workspaces.swift"
 fi
+# The spend row needs BOTH anchors: the meter prefix (so it never leaks into the
+# normal workspace list) and the |none| marker (so a zero balance stays hidden).
+# Losing the second one would park a permanent "€0.00" row on everyone.
+if [ -f sidebars/workspaces.swift ] \
+  && ! grep -Eq 'w\.title\.hasPrefix\("spend "\)' sidebars/workspaces.swift; then
+  flag "sidebar is missing its spend meter title anchor (w.title.hasPrefix)" "sidebars/workspaces.swift"
+fi
+if [ -f sidebars/workspaces.swift ] \
+  && ! grep -Eq 'w\.title\.hasPrefix\("spend \|none\|"\)' sidebars/workspaces.swift; then
+  flag "sidebar lost the zero-spend marker — a €0.00 row would show for everyone" "sidebars/workspaces.swift"
+fi
 # Same for the Codex provider — a clobber that dropped isCodexMeter would silently
 # kill the CODEX USAGE panel for everyone who opted in.
 if [ -f sidebars/workspaces.swift ] \

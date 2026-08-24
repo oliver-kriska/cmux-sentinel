@@ -251,5 +251,12 @@ out8="$(CLAUDE_MODEL_METER=1 bash "$DOCTOR" 2>&1)"
 case "$out8" in *"no 'm7d' sentinel (title"*) ok "opting in makes a missing m7d actionable";;
   *) bad "opted-in missing m7d was not reported";; esac
 
+echo "T11: a present spend sentinel is never nagged about"
+# It is expected to sit there painted `spend |none|` and invisible most of the time;
+# reporting that as a problem would train people to ignore the doctor.
+case "$out7" in *"'spend' sentinel present"*) ok "an existing spend sentinel reports as healthy";;
+  *"no 'spend' sentinel"*) ok "an absent spend sentinel is reported, not silently ignored";;
+  *) bad "the doctor says nothing at all about the spend meter";; esac
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -216,9 +216,9 @@ cmux sidebar validate workspaces && cmux sidebar reload   # synthetic interpreta
 make sidebar-live                     # mount repo sidebar against live data; human visual verdict
 
 # offline tests (stub cmux/security/curl/$HOME — run in CI too)
-make test   # bridge-state(58) poller-gate(86) codex-poller(83) install-hooks(52) sentinel-setup(61)
-            # sentinel-doctor(39) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
-            # amp-bridge(43) amp-poller(49) = 556 assertions total
+make test   # bridge-state(58) poller-gate(106) codex-poller(83) install-hooks(52) sentinel-setup(64)
+            # sentinel-doctor(40) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
+            # amp-bridge(43) amp-poller(49) = 580 assertions total
 ```
 
 ## Architecture / where things live
@@ -392,6 +392,27 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
   contract as Codex/Amp: it lists `5h`/`7d` always and adds `m7d` only when opted in AND the cap
   is live — silence never suppresses. Opted in with no cap → the row paints an honest `n/a`
   rather than a fabricated 0%, and does NOT fail (Anthropic adds and drops these).
+- **The `spend` meter is the one row that HIDES ITSELF, and the one optional row with no
+  opt-in flag.** The Claude payload's `spend` object is the account's extra-usage (overage)
+  budget and carries BOTH `used` and `limit` (plus its own `percent`), so unlike Amp's bare `$`
+  balance it has an honest 0–100% bar. Two rules that look inconsistent with the rest of the
+  file but aren't: **(1) no `*_METER=1` flag.** The opt-in rule exists because a dead meter
+  still costs a ⌘ key to show nothing — this row costs nothing to LOOK at, because the sidebar
+  drops it while the balance is zero. And it must be on by default to do its job at all: the
+  point is to catch money you did NOT expect to be spending, which a flag you never set cannot
+  do. **(2) The sentinel is created from whether the account HAS a budget, never from the
+  balance.** Gating creation on `spent > 0` would mean the meter can only appear after someone
+  re-runs setup — i.e. never, since nobody re-runs setup because they suspect a charge they
+  don't know about. The zero case is handled at RENDER time: the poller writes `spend |none|`
+  every run while the balance is zero, and the sidebar's `isZeroSpend` drops it. That marker is
+  load-bearing — `scripts/check-secrets.sh` asserts BOTH the `"spend "` prefix and the `|none|`
+  marker, because losing the second one parks a permanent `€0.00` row on everyone.
+  `isClaudeMeter` still matches a hidden row (so it never leaks into the normal workspace list);
+  the panel filters with the separate `isClaudePanelRow`. **`extra_usage.utilization` sits right
+  next to `spend.percent` and is `null`** — read the wrong one and you'd conclude the data isn't
+  there, exactly like `seven_day_opus`. Never guess a currency symbol: `fmt_money` maps
+  EUR/USD/GBP and prints any other ISO code verbatim, and honours `exponent` so a zero-decimal
+  currency doesn't grow a fake decimal point.
 - **The usage poller caches its last good response (`CMUX_SENTINEL_USAGE_CACHE_TTL`, default
   60s).** The documented way to use this tool — `--print` to look, then `--update` to paint — was
   two API calls seconds apart on top of the 5-minute launchd poll, and that burst is what trips

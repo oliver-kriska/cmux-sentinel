@@ -104,14 +104,19 @@ seed() { local i=0 t; : > "$WSLIST.raw"; for t in "$@"; do printf '%s\n' "$t" >>
          jq -R -s -c 'split("\n") | map(select(length>0)) | {workspaces: [to_entries[] | {index: .key, ref: ("w" + (.key+1|tostring)), title: .value}]}' "$WSLIST.raw" > "$WSLIST"; rm -f "$WSLIST.raw"; }
 titles() { jq -r '[.workspaces[].title] | join("|")' "$WSLIST" 2>/dev/null; }   # current order
 
-echo "T1: providers=claude → creates 5h + 7d only"
+echo "T1: providers=claude → creates 5h + 7d (+ the always-on spend row)"
 reset
 USAGE_PROVIDERS="claude" bash "$SETUP" >/dev/null 2>&1; ck "exit 0" [ "$?" = 0 ]
 ck  "created 5h"  created 5h
 ck  "created 7d"  created 7d
 ckn "did not create cx5h (codex disabled)" created cx5h
 ckn "did not create m7d (per-model meter is opt-in)" created m7d
-ck  "exactly 2 created" [ "$(ncreated)" = 2 ]
+# The real poller can't reach an API from this fake $HOME, so it can't tell us
+# whether the account has an overage budget — and silence never suppresses a
+# sentinel. The row stays invisible until money is actually spent, so failing open
+# here costs nothing; failing closed could hide a charge.
+ck  "created spend (fails open, and hides itself when there's nothing to show)" created spend
+ck  "exactly 3 created" [ "$(ncreated)" = 3 ]
 
 echo "T2: providers=\"claude codex\" → creates all four"
 # $HOME/PATH have no logged-in Codex CLI, so the real poller can't tell us
@@ -218,11 +223,29 @@ m7d
 '
 USAGE_PROVIDERS="claude" CLAUDE_POLLER="$ROOT/bin/poller" bash "$SETUP" >/dev/null 2>&1
 ckn "the cap existing is not consent to spend a ⌘ key on it" created m7d
+
+# The spend meter is the ONE row with no opt-in flag: the sidebar hides it while
+# the balance is zero, so it costs nothing to look at — and a flag you never set
+# could never warn you about a charge you didn't expect.
+echo "T2l: the spend sentinel needs no opt-in, but does need an overage budget"
+reset
+stub_poller '5h
+7d
+spend
+'
+USAGE_PROVIDERS="claude" CLAUDE_POLLER="$ROOT/bin/poller" bash "$SETUP" >/dev/null 2>&1
+ck "created spend with no flag at all" created spend
+reset
+stub_poller '5h
+7d
+'
+USAGE_PROVIDERS="claude" CLAUDE_POLLER="$ROOT/bin/poller" bash "$SETUP" >/dev/null 2>&1
+ckn "no overage budget → no spend sentinel" created spend
 rm -f "$ROOT/bin/poller"
 
 echo "T3: idempotent — existing sentinels are left alone"
 reset
-seed "5h x" "7d x" "cx5h x" "cx7d x"
+seed "5h x" "7d x" "spend |none|" "cx5h x" "cx7d x"
 out=$(USAGE_PROVIDERS="claude codex" bash "$SETUP" 2>&1); rc=$?
 ck "exit 0" [ "$rc" = 0 ]
 ck "created nothing (all exist)" [ "$(ncreated)" = 0 ]
@@ -241,14 +264,14 @@ ckhas "ON → warns" "$out" "may be ON"
 # workspaces. Meters interleaved among reals is the state that steals keys.
 echo "T5: layout parks meters below the list and anchors ⌘9 on the last real"
 reset
-seed a b c d e "cx7d ▎ 3%" "cx5h n/a" f g h i j k "5h ███ 41%" l "7d ██ 58%"
+seed a b c d e "cx7d ▎ 3%" "cx5h n/a" f g h i j k "5h ███ 41%" l "7d ██ 58%" "spend |none|"
 out=$(USAGE_PROVIDERS="claude codex" bash "$SETUP" 2>&1)
 ck "created nothing (all exist)" [ "$(ncreated)" = 0 ]
 ckhas "reported parking" "$out" "parked"
 ckhas "reported ⌘9 anchor" "$out" "anchored"
 at() { jq -r --argjson i "$1" '.workspaces[$i].title // ""' "$WSLIST"; }   # title at index
 ck "real workspaces keep their relative order" \
-   [ "$(jq -r '[.workspaces[].title | select(test("^(5h|7d|cx5h|cx7d)( |$)") | not)] | join("|")' "$WSLIST")" \
+   [ "$(jq -r '[.workspaces[].title | select(test("^(5h|7d|m7d|spend|cx5h|cx7d)( |$)") | not)] | join("|")' "$WSLIST")" \
      = "a|b|c|d|e|f|g|h|i|j|k|l" ]
 # ⌘1…⌘8 = indices 0-7
 for i in 0 1 2 3 4 5 6 7; do
@@ -257,9 +280,9 @@ for i in 0 1 2 3 4 5 6 7; do
 done
 # ⌘9 = last workspace
 last=$(jq -r '.workspaces[-1].title' "$WSLIST")
-case "$last" in 5h*|7d*|cx5h*|cx7d*) bad "Cmd+9 hits a meter ($last)" ;; *) ok "Cmd+9 → real ($last)" ;; esac
-ck "all four meters sit in the keyless band (indices 8…count-2)" \
-   [ "$(jq -r '[.workspaces[8:-1][] | select(.title | test("^(5h|7d|cx5h|cx7d)( |$)"))] | length' "$WSLIST")" = 4 ]
+case "$last" in 5h*|7d*|m7d*|spend*|cx5h*|cx7d*) bad "Cmd+9 hits a meter ($last)" ;; *) ok "Cmd+9 → real ($last)" ;; esac
+ck "all five meters sit in the keyless band (indices 8…count-2)" \
+   [ "$(jq -r '[.workspaces[8:-1][] | select(.title | test("^(5h|7d|m7d|spend|cx5h|cx7d)( |$)"))] | length' "$WSLIST")" = 5 ]
 
 echo "T6: layout is idempotent — a second run converges to the same order"
 before=$(titles)

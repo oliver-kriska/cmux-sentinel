@@ -34,6 +34,7 @@ case "$1" in
       # STUB_M7D=1 → the opt-in per-model sentinel also exists.
       extra=""
       [ -n "${STUB_M7D:-}" ] && extra=',{"title":"m7d init","ref":"workspace:3"}'
+      [ -n "${STUB_SPEND_WS:-}" ] && extra="$extra"',{"title":"spend init","ref":"workspace:4"}'
       if [ -n "${STUB_NO_5H:-}" ]; then
         # The 5h sentinel was closed — an ordinary workspace anyone can close.
         printf '{"workspaces":[{"title":"7d init","ref":"workspace:2"}%s]}\n' "$extra"
@@ -86,11 +87,20 @@ else
   # STUB_SCOPED=<pct> adds the modern self-describing limits[] array with a
   # per-model weekly cap. STUB_SCOPED_NAME proves the model name is read from the
   # payload rather than hardcoded anywhere.
+  # STUB_SPEND=<used_minor> adds the extra-usage budget object (limit 9000 = €90.00
+  # unless STUB_SPEND_LIMIT says otherwise). STUB_SPEND_CUR / STUB_SPEND_EXP drive
+  # the currency formatting cases.
+  spend=""
+  if [ -n "${STUB_SPEND:-}" ]; then
+    exp="${STUB_SPEND_EXP:-2}"; cur="${STUB_SPEND_CUR:-EUR}"; lim="${STUB_SPEND_LIMIT:-9000}"
+    pct=$(( STUB_SPEND * 100 / lim ))
+    spend=$(printf ',"spend":{"used":{"amount_minor":%s,"currency":"%s","exponent":%s},"limit":{"amount_minor":%s,"currency":"%s","exponent":%s},"percent":%s,"enabled":true}'       "$STUB_SPEND" "$cur" "$exp" "$lim" "$cur" "$exp" "$pct")
+  fi
   limits=""
   if [ -n "${STUB_SCOPED:-}" ]; then
     limits=$(printf ',"limits":[{"kind":"five_hour","group":"session","percent":7},{"kind":"weekly_scoped","group":"weekly","percent":%s,"resets_at":"2026-06-25T00:00:00Z","scope":{"model":{"id":null,"display_name":"%s"},"surface":null}}]' "$STUB_SCOPED" "${STUB_SCOPED_NAME:-Fable}")
   fi
-  body=$(printf '{"five_hour":{"utilization":%s,"resets_at":"2026-06-19T20:00:00Z"},"seven_day":{"utilization":%s,"resets_at":"2026-06-25T00:00:00Z"}%s}' "${STUB_FH:-7}" "${STUB_SH:-42}" "$limits")
+  body=$(printf '{"five_hour":{"utilization":%s,"resets_at":"2026-06-19T20:00:00Z"},"seven_day":{"utilization":%s,"resets_at":"2026-06-25T00:00:00Z"}%s%s}' "${STUB_FH:-7}" "${STUB_SH:-42}" "$limits" "$spend")
 fi
 printf '%s' "$body"
 [ -n "${STUB_NO_CODE:-}" ] || printf '\n%s' "$code"
@@ -334,6 +344,69 @@ ckcode "a missing m7d sentinel still reports failure" "$?" 1
 ckhas "…but 5h still painted" "5h |7%"
 ckhas "…and 7d still painted" "7d |42%"
 ckstamp "a landed meter is still fresh data"
+
+echo "T12: extra-usage SPEND — the row that hides itself"
+# Money you have not spent is not information, and a permanent €0.00 row would train
+# you to ignore the one row that matters when it finally moves. So the poller writes
+# a marker the SIDEBAR keys on, rather than gating creation on the balance: gating
+# creation would mean the meter can only appear after a setup re-run, and nobody
+# re-runs setup because they suspect a charge they don't know about.
+reset
+STUB_CURL="ok" STUB_SPEND=1260 STUB_SPEND_WS=1 bash "$POLLER" --update >/dev/null
+ckcode "a non-zero balance paints" "$?" 0
+ckhas "spend row shows money against its budget" "spend |14% (€12.60 of €90.00)"
+ckprog "spend gets a native bar too" "PROG 0.14"
+
+reset
+STUB_CURL="ok" STUB_SPEND=0 STUB_SPEND_WS=1 bash "$POLLER" --update >/dev/null
+ckcode "a zero balance is not an error" "$?" 0
+ckhas "a zero balance paints the hide marker" "spend |none|"
+cknothas "a zero balance shows no money at all" "€0.00"
+ckprog "a zero balance drops the native bar" "CLEAR"
+
+reset
+STUB_CURL="ok" STUB_SPEND_WS=1 bash "$POLLER" --update >/dev/null
+ckcode "an account with no overage budget is not an error" "$?" 0
+ckhas "no budget also hides the row" "spend |none|"
+
+# --print is the diagnostic surface: it shows the money whether or not the sidebar
+# would, so "why don't I see a spend row" has an answer that isn't guesswork.
+reset
+OUT=$(STUB_CURL="ok" STUB_SPEND=0 bash "$POLLER" --print)
+ckout "--print shows a zero balance the sidebar hides" "€0.00 of €90.00"
+ckout "--print explains the hidden row" "the sidebar hides this row"
+reset   # else the 60s response cache replays the zero-balance body above
+OUT=$(STUB_CURL="ok" STUB_SPEND=4500 bash "$POLLER" --print)
+ckoutnot "--print drops the hint once there IS spend" "the sidebar hides this row"
+
+# The sentinel tracks whether the ACCOUNT has a budget, not what the balance is —
+# otherwise the row could never appear on its own.
+reset
+OUT=$(STUB_CURL="ok" STUB_SPEND=0 bash "$POLLER" --buckets)
+ckout "--buckets lists spend even at a zero balance" "spend"
+reset
+OUT=$(STUB_CURL="ok" bash "$POLLER" --buckets)
+ckoutnot "--buckets omits spend with no budget at all" "spend"
+
+# Currency: never GUESS a symbol. An unrecognised code prints as the code.
+reset
+STUB_CURL="ok" STUB_SPEND=1260 STUB_SPEND_CUR="CZK" STUB_SPEND_WS=1 bash "$POLLER" --update >/dev/null
+ckhas "an unknown currency prints its ISO code" "CZK 12.60"
+reset
+STUB_CURL="ok" STUB_SPEND=1260 STUB_SPEND_CUR="USD" STUB_SPEND_WS=1 bash "$POLLER" --update >/dev/null
+ckhas "a known currency prints its symbol" "\$12.60"
+# A zero-decimal currency (JPY, HUF) must not grow a fake decimal point.
+reset
+STUB_CURL="ok" STUB_SPEND=1260 STUB_SPEND_EXP=0 STUB_SPEND_LIMIT=9000 STUB_SPEND_CUR="JPY" STUB_SPEND_WS=1 bash "$POLLER" --update >/dev/null
+ckhas "a zero-decimal currency has no decimal point" "JPY 1260 of JPY 9000"
+
+# Real spend with no sentinel is a broken install — but it must not cost the other
+# meters (the ledger property).
+reset
+STUB_CURL="ok" STUB_SPEND=1260 bash "$POLLER" --update >/dev/null 2>&1
+ckcode "a missing spend sentinel reports failure" "$?" 1
+ckhas "…but 5h still painted" "5h |7%"
+ckhas "…and 7d still painted" "7d |42%"
 
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
