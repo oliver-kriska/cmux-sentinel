@@ -17,6 +17,12 @@
 #         SENTINEL_LAYOUT=0 (or --no-layout) skips the shortcut layout pass.
 set -uo pipefail
 
+# cmux prints a one-time deprecation notice for legacy verbs (rename-workspace →
+# workspace rename) on STDERR. Anything that CAPTURES cmux stderr to explain a
+# failure gets that notice at the front of the reason, where it reads as the cause
+# — it buried a real "Command timed out" once. cmux documents this switch for it.
+export CMUX_QUIET=1
+
 LAYOUT="${SENTINEL_LAYOUT:-1}"
 for a in "$@"; do
   case "$a" in

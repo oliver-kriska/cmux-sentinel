@@ -59,6 +59,12 @@
 
 set -uo pipefail
 
+# cmux prints a one-time deprecation notice for legacy verbs (rename-workspace →
+# workspace rename) on STDERR. Anything that CAPTURES cmux stderr to explain a
+# failure gets that notice at the front of the reason, where it reads as the cause
+# — it buried a real "Command timed out" once. cmux documents this switch for it.
+export CMUX_QUIET=1
+
 AMP_BIN="${AMP_BIN:-amp}"
 # Existence-only login probe: never read these, they hold credentials.
 AMP_SECRETS="${AMP_SECRETS_JSON:-$HOME/.local/share/amp/secrets.json}"
@@ -289,10 +295,16 @@ main() {
     exit 0
   fi
 
-  out=$(fetch_usage) || {
+  local frc
+  out=$(fetch_usage); frc=$?
+  if [ "$frc" -ne 0 ]; then
+    # Amp's failure modes aren't distinguishable from the outside (no exit-code
+    # contract, and its stderr is swallowed to keep credentials out of the log), so
+    # do NOT invent a cause the way the old "(logged out? offline?)" guess-list did.
+    # Report the exit status and hand over the one command that shows the real error.
     [ "$mode" = "--update" ] && mark_offline "offline"
-    die "\`$AMP_BIN usage\` failed (logged out? offline?)"
-  }
+    die "\`$AMP_BIN usage\` failed (exit $frc) — run it by hand to see why"
+  fi
 
   if [ "$mode" = "--raw" ]; then
     printf '%s\n' "$out"
@@ -344,6 +356,14 @@ main() {
     [ "$ORB_METER" = "1" ] && { _update_bucket "$LABEL_AMPO" "$naO" "${usedO:-0}" "$human" || true; }
     [ "${#REJECTED[@]}" -gt 0 ] && die "cmux rejected the rename for: ${REJECTED[*]}"
     record_success || echo "WARN: meters updated, but couldn't record Amp freshness in $USAGE_STATE_DIR" >&2
+    # Parity with the Claude/Codex pollers: a success line, so the launchd .log
+    # proves the poller ran. Without it amp's log stayed 0 bytes forever and a
+    # silently-dead amp poller was indistinguishable from a healthy one.
+    if [ "$ORB_METER" = "1" ]; then
+      echo "updated: ${LABEL_AMPU}=$([ "$naU" = 1 ] && echo n/a || echo "${usedU}%")  ${LABEL_AMPO}=$([ "$naO" = 1 ] && echo n/a || echo "${usedO}%")"
+    else
+      echo "updated: ${LABEL_AMPU}=$([ "$naU" = 1 ] && echo n/a || echo "${usedU}%")"
+    fi
     [ "${#MISSING[@]}" -gt 0 ] && die "no sentinel workspace for: ${MISSING[*]} — create it: ~/bin/cmux-sentinel-setup.sh"
     return 0
   fi

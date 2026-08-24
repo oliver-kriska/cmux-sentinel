@@ -54,6 +54,12 @@
 
 set -uo pipefail
 
+# cmux prints a one-time deprecation notice for legacy verbs (rename-workspace →
+# workspace rename) on STDERR. We capture stderr to explain a FAILED write, so that
+# notice lands at the front of the reason and reads as though it caused the failure
+# — it buried a real "Command timed out" once. cmux itself documents this switch.
+export CMUX_QUIET=1
+
 USAGE_ENDPOINT="https://api.anthropic.com/api/oauth/usage"
 OAUTH_BETA="oauth-2025-04-20"
 KEYCHAIN_SERVICE="Claude Code-credentials"

@@ -35,6 +35,12 @@
 
 set -uo pipefail
 
+# cmux prints a one-time deprecation notice for legacy verbs (rename-workspace →
+# workspace rename) on STDERR. Anything that CAPTURES cmux stderr to explain a
+# failure gets that notice at the front of the reason, where it reads as the cause
+# — it buried a real "Command timed out" once. cmux documents this switch for it.
+export CMUX_QUIET=1
+
 SENTINELS_ENV="$HOME/.config/cmux/usage-sentinels.env"
 # shellcheck disable=SC1090
 [ -f "$SENTINELS_ENV" ] && source "$SENTINELS_ENV"
@@ -80,7 +86,12 @@ main() {
 
   if [ "$mode" = "--update" ]; then
     if [ "$GROUP_NAME_SYNC" != "1" ]; then
-      echo "group-name sync disabled (set GROUP_NAME_SYNC=1 in $SENTINELS_ENV) — nothing to do" >&2
+      # Only a HUMAN needs to hear this. launchd runs --update every 5 minutes and
+      # captures stderr, so an unconditional notice wrote 3259 identical lines /
+      # 400KB (~12MB a year) into the .err of a feature that is OFF BY DEFAULT —
+      # and buried any real error in it. The plist calls itself "dormant unless
+      # enabled"; this is what actually makes that true.
+      [ -t 2 ] && echo "group-name sync disabled (set GROUP_NAME_SYNC=1 in $SENTINELS_ENV) — nothing to do" >&2
       exit 0
     fi
     cmux ping &>/dev/null || die "cmux socket rejected (restart cmux to apply socketControlMode=automation)"
