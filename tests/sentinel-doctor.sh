@@ -243,8 +243,12 @@ echo "T10: the opt-in per-model meter is only 'missing' when it was asked for"
 # user forever to create a meter they never asked for.
 printf 'USAGE_PROVIDERS="claude"\n' > "$HOME/.config/cmux/usage-sentinels.env"
 out7="$(bash "$DOCTOR" 2>&1)"
-case "$out7" in *"no 'm7d' sentinel — correct, it isn't metered"*) ok "an absent m7d is correct while the meter is off";;
-  *) bad "absent m7d was not reported as correct";; esac
+case "$out7" in *"no 'm7d' sentinel — the per-model meter is off"*) ok "an absent m7d is reported as OFF, not as broken";;
+  *) bad "absent m7d was not reported as merely off";; esac
+# The point of not-nagging is not silence — it's telling someone who WANTS the row
+# how to get it. "correct, it isn't metered" answered the wrong question.
+case "$out7" in *"CLAUDE_MODEL_METER=1"*) ok "…and names the switch that turns it on";;
+  *) bad "reported the meter as off without saying how to enable it";; esac
 case "$out7" in *"no 'm7d' sentinel (title"*) bad "doctor nagged about an m7d nobody asked for";;
   *) ok "no false m7d creation advice";; esac
 out8="$(CLAUDE_MODEL_METER=1 bash "$DOCTOR" 2>&1)"

@@ -224,6 +224,35 @@ m7d
 USAGE_PROVIDERS="claude" CLAUDE_POLLER="$ROOT/bin/poller" bash "$SETUP" >/dev/null 2>&1
 ckn "the cap existing is not consent to spend a ⌘ key on it" created m7d
 
+# ...but it must SAY so. An opt-in meter that skips silently means someone who
+# actually has a per-model cap never learns the row exists — they just don't see
+# it and conclude the tool is broken. (That is exactly what happened to the first
+# user who updated: "it's probably fixed but I don't have Fable there".)
+echo "T2k2: an opt-in meter you could be using announces itself, once"
+reset
+cat > "$ROOT/bin/poller" <<'MODELPOLLER'
+#!/bin/bash
+[ "$1" = --buckets ] || exit 2
+printf '5h\n7d\n'
+[ "${CLAUDE_MODEL_METER:-0}" = 1 ] && printf 'm7d\n'
+exit 0
+MODELPOLLER
+chmod +x "$ROOT/bin/poller"
+out=$(USAGE_PROVIDERS="claude" CLAUDE_POLLER="$ROOT/bin/poller" bash "$SETUP" 2>&1)
+ckn "still does not create it without the opt-in" created m7d
+ckhas "tells you the cap exists" "$out" "HAS a per-model weekly cap"
+ckhas "tells you exactly how to turn it on" "$out" "CLAUDE_MODEL_METER=1"
+
+echo "T2k3: no per-model cap → no advice about one"
+reset
+stub_poller '5h
+7d
+'
+out=$(USAGE_PROVIDERS="claude" CLAUDE_POLLER="$ROOT/bin/poller" bash "$SETUP" 2>&1)
+ckn "no cap, no sentinel" created m7d
+case "$out" in *"per-model weekly cap"*) bad "advertised a meter this account cannot use" ;;
+  *) ok "silent when there is nothing to opt into" ;; esac
+
 # The spend meter is the ONE row with no opt-in flag: the sidebar hides it while
 # the balance is zero, so it costs nothing to look at — and a flag you never set
 # could never warn you about a charge you didn't expect.

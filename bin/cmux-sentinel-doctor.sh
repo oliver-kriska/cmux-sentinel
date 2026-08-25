@@ -247,7 +247,11 @@ if have cmux && have jq; then
       elif [ "$lbl_metered" = 0 ]; then warn "'$lbl' sentinel present ($where) but it isn't metered (CLAUDE_MODEL_METER is off) — it'll read 'n/a' forever and still eats a ⌘ key: $close_cmd"
       else ok "'$lbl' sentinel present ($where)"; fi
     else
-      if [ "$lbl_metered" = 0 ]; then ok "no '$lbl' sentinel — correct, it isn't metered"
+      # "correct, it isn't metered" answers the wrong question for someone who WANTS
+      # the row and can't work out why it never appeared. Name the switch.
+      if [ "$lbl" = "$lblm7d" ] && [ "$lbl_metered" = 0 ]; then
+        ok "no '$lbl' sentinel — the per-model meter is off; set CLAUDE_MODEL_METER=1 in $envf and re-run $HERE/cmux-sentinel-setup.sh to meter it (see cmux-claude-usage.sh --print for whether you have such a cap)"
+      elif [ "$lbl_metered" = 0 ]; then ok "no '$lbl' sentinel — correct, it isn't metered"
       elif [ "$claude_on" = 1 ] && [ "$claude_inst" = 1 ]; then warn "no '$lbl' sentinel (title \"$lbl\" or starting \"$lbl \") — create it: $HERE/cmux-sentinel-setup.sh"
       else ok "no '$lbl' sentinel — panel hidden by design (claude off/uninstalled)"; fi
     fi

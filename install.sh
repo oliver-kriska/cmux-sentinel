@@ -308,12 +308,21 @@ cat <<'NEXT'
 1. Create the "sentinel" workspaces that hold the meters. EASIEST — let the setup
    script make them (idempotent; honours USAGE_PROVIDERS; also checks auto-naming):
      ~/bin/cmux-sentinel-setup.sh
+   RE-RUN IT AFTER EVERY UPDATE, not just on a fresh install: a release can add a
+   meter, and it also re-parks the sentinels out of ⌘1…⌘9 (cmux drops a new
+   workspace beside your current selection, not at the end, so creating one shifts
+   the shortcut numbering until you re-park).
    Or by hand: create idle workspaces and name them so their TITLES start with the
    labels (no ids to copy; cmux dropped stable UUIDs, so we match by title):
      cmux workspace list                                    # find the refs
      cmux rename-workspace --workspace workspace:<N> "5h"   # one for 5h, one for 7d
-   To use different labels, set SENTINEL_5H_LABEL / SENTINEL_7D_LABEL in
+   To use different labels, set SENTINEL_<LABEL>_LABEL in
    ~/.config/cmux/usage-sentinels.env and the matching hasPrefix() in the sidebar.
+   Claude meters: 5h (session) + 7d (week) always; "spend" whenever your account
+   has an extra-usage budget (it stays HIDDEN until you actually spend, so it costs
+   you nothing to carry); "m7d" for a per-model weekly cap only if you opt in with
+   CLAUDE_MODEL_METER=1. `~/bin/cmux-claude-usage.sh --print` lists whatever your
+   account actually has, metered or not.
 
 2. Inspect and paint every enabled provider (skip the others; setup prints the
    matching --update commands):

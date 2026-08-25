@@ -216,9 +216,9 @@ cmux sidebar validate workspaces && cmux sidebar reload   # synthetic interpreta
 make sidebar-live                     # mount repo sidebar against live data; human visual verdict
 
 # offline tests (stub cmux/security/curl/$HOME — run in CI too)
-make test   # bridge-state(58) poller-gate(109) codex-poller(83) install-hooks(52) sentinel-setup(64)
-            # sentinel-doctor(40) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
-            # amp-bridge(43) amp-poller(49) = 583 assertions total
+make test   # bridge-state(58) poller-gate(109) codex-poller(83) install-hooks(52) sentinel-setup(69)
+            # sentinel-doctor(41) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
+            # amp-bridge(43) amp-poller(49) = 589 assertions total
 ```
 
 ## Architecture / where things live
@@ -389,8 +389,12 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
   top-level keys and are `null`** — reading those is exactly the "renders empty ≠ unreachable"
   mistake this file keeps warning about; a non-null `weekly_scoped` row is the only proof.
   Off by default (`CLAUDE_MODEL_METER=1`) for the same reason as the Amp orb meter: the sentinel
-  is an ordinary workspace and costs one of the ⌘1…⌘9 keys. `--print` shows the row (and how to
-  turn it on) whether or not it is metered, so discovering it never requires opting in first.
+  is an ordinary workspace and costs one of the ⌘1…⌘9 keys. **An opt-in meter that skips SILENTLY is a bug, not restraint** — the first user to update
+  saw no Fable row and couldn't tell "off" from "broken". So all three surfaces name the switch:
+  `--print` lists the row (and how to enable it) whether or not it is metered; setup probes what
+  `--buckets` WOULD answer with the flag on and says so only when a real cap exists (no cap, no
+  noise); the doctor says "the per-model meter is off" plus the variable, instead of the useless
+  "correct, it isn't metered". Discovering the feature must never require opting into it first.
   `--buckets` was added to the Claude poller for setup's `ensure_live`, with the same fail-open
   contract as Codex/Amp: it lists `5h`/`7d` always and adds `m7d` only when opted in AND the cap
   is live — silence never suppresses. Opted in with no cap → the row paints an honest `n/a`

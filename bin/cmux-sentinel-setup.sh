@@ -111,6 +111,16 @@ case " $PROVIDERS " in *" claude "*)
   cl_live=$(live_buckets "$CLAUDE_POLLER")
   if [ "${CLAUDE_MODEL_METER:-0}" = 1 ]; then
     ensure_live "$LABEL_M7D" "Claude per-model weekly meter — managed by cmux-claude-usage.sh; leave idle" "$cl_live"
+  else
+    # Opt-in meters skip SILENTLY, which means someone who actually HAS a per-model
+    # cap never learns the row exists — they just don't see it and assume it's
+    # broken. So ask the poller what the answer WOULD be with the flag on (a
+    # read-only probe; the response cache makes it free) and mention it only when
+    # there is a real cap to meter. No cap, no noise.
+    if printf '%s\n' "$(CLAUDE_MODEL_METER=1 live_buckets "$CLAUDE_POLLER")" | grep -qxF -- "$LABEL_M7D"; then
+      echo "  i your account HAS a per-model weekly cap, but '$LABEL_M7D' is opt-in — add"
+      echo "    CLAUDE_MODEL_METER=1 to ~/.config/cmux/usage-sentinels.env and re-run to meter it"
+    fi
   fi
   # Extra-usage SPEND. Created whenever the account has an overage budget — a stable
   # account property, NOT the balance. This is the one meter with no opt-in flag,
