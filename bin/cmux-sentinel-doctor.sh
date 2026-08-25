@@ -40,6 +40,38 @@ check_launchd_job() { # $1=provider  $2=job label
 
 echo "cmux-sentinel doctor"
 
+# ── version ───────────────────────────────────────────────────────────────────
+# "Is the fix in my copy?" used to cost the maintainer a chat round-trip. The
+# installer stamps what it deployed; this reports it, and (unless you turn it off)
+# asks GitHub whether something newer exists. The remote check is deliberately
+# quick and FAIL-SILENT: an offline machine, a rate-limited raw.githubusercontent,
+# or a moved file must never turn a health report into an error.
+VERSION_FILE="$HOME/.config/cmux-sentinel/VERSION"
+ver_gt() { # $1 newer than $2?
+  [ "$1" = "$2" ] && return 1
+  [ "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" = "$2" ]
+}
+if [ -f "$VERSION_FILE" ]; then
+  # shellcheck disable=SC1090
+  inst_ver="$(sed -n 's/^version=//p' "$VERSION_FILE" | head -1)"
+  inst_on="$(sed -n 's/^installed=//p' "$VERSION_FILE" | head -1)"
+  inst_sha="$(sed -n 's/^commit=//p' "$VERSION_FILE" | head -1)"
+  note "cmux-sentinel v${inst_ver:-?} (installed ${inst_on:-?}${inst_sha:+, $inst_sha})"
+  if [ "${CMUX_SENTINEL_UPDATE_CHECK:-1}" = 1 ] && have curl && [ -n "$inst_ver" ]; then
+    latest="$(curl -fsS --max-time 3 \
+      https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/VERSION 2>/dev/null \
+      | tr -d '[:space:]')"
+    case "$latest" in
+      ''|*[!0-9.]*) : ;;   # unreachable or not a version — say nothing
+      *) if ver_gt "$latest" "$inst_ver"; then
+           warn "v$latest is available (you have v$inst_ver) — see CHANGELOG.md; update with: curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/install.sh | bash"
+         fi ;;
+    esac
+  fi
+else
+  note "no version stamp — installed before v0.2.0, or copied by hand; re-run install.sh to record one"
+fi
+
 echo "• cmux"
 if have cmux; then
   if cmux ping &>/dev/null; then ok "cmux present and responding"

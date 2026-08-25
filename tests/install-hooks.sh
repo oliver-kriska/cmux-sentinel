@@ -5,7 +5,7 @@
 # states, so it's worth a real end-to-end test.
 #
 # Runs the ACTUAL install.sh against a throwaway $HOME (its main flow makes no
-# cmux/launchctl/security/network calls, only file copies), then asserts the hook
+# launchctl/security/network calls, only file copies), then asserts the hook
 # merge: every event wired, pre-existing user hooks preserved, idempotent on
 # re-run, and a graceful no-op when jq is unavailable.
 #
@@ -34,7 +34,7 @@ bad() { fail=$((fail + 1)); printf '  ✗ %s\n' "$1"; }
 # count cmux-bridge references registered for one event
 bridgecount() { jq --arg e "$1" --arg c "$BRIDGE" \
   '[(.hooks[$e] // [])[].hooks[]? | select(.command == $c)] | length' "$SETTINGS" 2>/dev/null; }
-runinstall() { ( cd "$ROOT" && WITH_BRIDGE=1 HOME="$SBX" bash "$INSTALL" ) >/dev/null 2>&1; }
+runinstall() { ( cd "$ROOT" && WITH_BRIDGE=1 HOME="$SBX" NO_SETUP=1 bash "$INSTALL" ) >/dev/null 2>&1; }
 
 # Pre-seed settings.json: an UNRELATED user hook on PreToolUse (must survive) and a
 # cmux-bridge already on Stop (must NOT be duplicated).
@@ -74,7 +74,7 @@ if [ -z "$dups" ]; then ok "every event has exactly one cmux-bridge after re-run
 
 echo "T3b: plain re-run refreshes an already-registered Claude bridge"
 printf '#!/bin/bash\n# stale\n' > "$SBX/.claude/hooks/cmux-bridge.sh"
-( cd "$ROOT" && HOME="$SBX" bash "$INSTALL" ) >/dev/null 2>&1
+( cd "$ROOT" && HOME="$SBX" NO_SETUP=1 bash "$INSTALL" ) >/dev/null 2>&1
 if cmp -s "$HERE/../hooks/cmux-bridge.sh" "$SBX/.claude/hooks/cmux-bridge.sh"; then ok "plain re-run refreshed Claude bridge"; else bad "plain re-run left Claude bridge stale"; fi
 if [ "$(bridgecount SessionStart)" = 1 ]; then ok "existing Claude registration remains idempotent"; else bad "cmux-bridge SessionStart count = $(bridgecount SessionStart)"; fi
 
@@ -90,7 +90,7 @@ if [ ! -e "$NOJQ/jq" ]; then ok "test bin has no jq (precondition)"; else bad "c
 # Fresh settings with only the unrelated hook.
 printf '{"hooks":{"PreToolUse":[{"matcher":"","hooks":[{"type":"command","command":"~/my/other-hook.sh"}]}]}}\n' > "$SETTINGS"
 before="$(cat "$SETTINGS")"
-( cd "$ROOT" && WITH_BRIDGE=1 HOME="$SBX" PATH="$NOJQ" bash "$INSTALL" ) >/dev/null 2>&1; rc=$?
+( cd "$ROOT" && WITH_BRIDGE=1 HOME="$SBX" PATH="$NOJQ" NO_SETUP=1 bash "$INSTALL" ) >/dev/null 2>&1; rc=$?
 if [ "$rc" = 0 ]; then ok "install.sh still exited 0 without jq"; else bad "install.sh exited $rc without jq"; fi
 if [ "$(cat "$SETTINGS")" = "$before" ]; then ok "settings.json left untouched (no clobber)"; else bad "settings.json was modified without jq"; fi
 
@@ -104,7 +104,7 @@ zedcount() { jq --arg e "$1" --arg c "$ZED" \
   '[(.hooks[$e] // [])[].hooks[]? | select(.command == $c)] | length' "$SETTINGS" 2>/dev/null; }
 
 echo "T5: --with-zed (flag) wires zed-bridge for its 8 events + installs the helpers"
-( cd "$ROOT" && HOME="$SBX" bash "$INSTALL" --with-zed ) >/dev/null 2>&1; rc=$?
+( cd "$ROOT" && HOME="$SBX" NO_SETUP=1 bash "$INSTALL" --with-zed ) >/dev/null 2>&1; rc=$?
 if [ "$rc" = 0 ]; then ok "install.sh --with-zed exited 0"; else bad "install.sh --with-zed exited $rc"; fi
 zmiss=""
 for ev in $ZED_EVENTS; do
@@ -121,7 +121,7 @@ for f in .claude/hooks/zed-bridge.sh bin/cmux-open-in-zed.sh bin/zed-usage-tui.s
 done
 
 echo "T6: WITH_ZED=1 re-run is idempotent and does not infer Claude opt-in"
-( cd "$ROOT" && WITH_ZED=1 HOME="$SBX" bash "$INSTALL" ) >/dev/null 2>&1
+( cd "$ROOT" && WITH_ZED=1 HOME="$SBX" NO_SETUP=1 bash "$INSTALL" ) >/dev/null 2>&1
 zdups=""
 for ev in $ZED_EVENTS; do
   [ "$(zedcount "$ev")" = 1 ] || zdups="$zdups $ev=$(zedcount "$ev")"
@@ -131,18 +131,18 @@ if [ "$(bridgecount SessionStart)" = 0 ]; then ok "--with-zed does not infer Cla
 
 echo "T7: a default install (no flags/env) stays Zed-free; unknown flag rejected"
 SBX2="$ROOT/home2"; mkdir -p "$SBX2/.claude"
-( cd "$ROOT" && HOME="$SBX2" bash "$INSTALL" ) >/dev/null 2>&1; rc=$?
+( cd "$ROOT" && HOME="$SBX2" NO_SETUP=1 bash "$INSTALL" ) >/dev/null 2>&1; rc=$?
 if [ "$rc" = 0 ]; then ok "default install exited 0"; else bad "default install exited $rc"; fi
 if [ ! -e "$SBX2/.claude/hooks/zed-bridge.sh" ]; then ok "no zed-bridge.sh on default install"; else bad "zed-bridge.sh installed by default"; fi
 if [ ! -e "$SBX2/.claude/hooks/cmux-bridge.sh" ]; then ok "no cmux-bridge.sh on default install"; else bad "cmux-bridge.sh installed by default"; fi
 S2="$SBX2/.claude/settings.json"
 if [ ! -f "$S2" ] || ! grep -q -e cmux-bridge -e zed-bridge "$S2" 2>/dev/null; then ok "default settings carries no bridge hooks"; else bad "default install wrote bridge hooks"; fi
-( cd "$ROOT" && HOME="$SBX2" bash "$INSTALL" --bogus ) >/dev/null 2>&1; rc=$?
+( cd "$ROOT" && HOME="$SBX2" NO_SETUP=1 bash "$INSTALL" --bogus ) >/dev/null 2>&1; rc=$?
 if [ "$rc" = 2 ]; then ok "unknown flag → exit 2"; else bad "unknown flag exit $rc (want 2)"; fi
 
 echo "T8: Amp-only install uses a neutral bridge and never opts into Claude hooks"
 SBX3="$ROOT/home3"; mkdir -p "$SBX3/.claude"
-( cd "$ROOT" && HOME="$SBX3" bash "$INSTALL" --with-amp ) >/dev/null 2>&1; rc=$?
+( cd "$ROOT" && HOME="$SBX3" NO_SETUP=1 bash "$INSTALL" --with-amp ) >/dev/null 2>&1; rc=$?
 if [ "$rc" = 0 ]; then ok "install.sh --with-amp exited 0"; else bad "install.sh --with-amp exited $rc"; fi
 if [ -x "$SBX3/.config/cmux-sentinel/cmux-bridge.sh" ]; then ok "Amp shared bridge installed at neutral path"; else bad "neutral Amp shared bridge missing"; fi
 if [ -f "$SBX3/.config/amp/plugins/cmux-sentinel-amp.ts" ]; then ok "Amp plugin installed"; else bad "Amp plugin missing"; fi
@@ -150,7 +150,7 @@ if [ ! -e "$SBX3/.claude/hooks/cmux-bridge.sh" ]; then ok "Amp-only install crea
 if [ ! -f "$SBX3/.claude/settings.json" ] || ! grep -q cmux-bridge "$SBX3/.claude/settings.json" 2>/dev/null; then ok "Amp-only install registers no Claude hooks"; else bad "Amp-only install registered Claude hooks"; fi
 
 echo "T9: plain re-run refreshes Amp without turning Claude integration on"
-( cd "$ROOT" && HOME="$SBX3" bash "$INSTALL" ) >/dev/null 2>&1; rc=$?
+( cd "$ROOT" && HOME="$SBX3" NO_SETUP=1 bash "$INSTALL" ) >/dev/null 2>&1; rc=$?
 if [ "$rc" = 0 ]; then ok "plain re-run after Amp exited 0"; else bad "plain re-run after Amp exited $rc"; fi
 if [ -x "$SBX3/.config/cmux-sentinel/cmux-bridge.sh" ]; then ok "plain re-run keeps neutral Amp bridge"; else bad "plain re-run lost neutral Amp bridge"; fi
 if [ ! -e "$SBX3/.claude/hooks/cmux-bridge.sh" ]; then ok "plain re-run still creates no Claude bridge"; else bad "plain re-run created Claude bridge"; fi
@@ -161,7 +161,7 @@ SBX4="$ROOT/home4"; mkdir -p "$SBX4/.claude/hooks" "$SBX4/.config/amp/plugins"
 printf '#!/bin/bash\n# legacy Amp dependency\n' > "$SBX4/.claude/hooks/cmux-bridge.sh"
 printf '// legacy Amp plugin\n' > "$SBX4/.config/amp/plugins/cmux-sentinel-amp.ts"
 printf '{"hooks":{}}\n' > "$SBX4/.claude/settings.json"
-( cd "$ROOT" && HOME="$SBX4" bash "$INSTALL" ) >/dev/null 2>&1; rc=$?
+( cd "$ROOT" && HOME="$SBX4" NO_SETUP=1 bash "$INSTALL" ) >/dev/null 2>&1; rc=$?
 if [ "$rc" = 0 ]; then ok "legacy Amp update exited 0"; else bad "legacy Amp update exited $rc"; fi
 if [ -x "$SBX4/.config/cmux-sentinel/cmux-bridge.sh" ]; then ok "legacy Amp dependency migrated to neutral path"; else bad "legacy Amp dependency not migrated"; fi
 if ! grep -q cmux-bridge "$SBX4/.claude/settings.json" 2>/dev/null; then ok "legacy Amp update keeps Claude hooks disabled"; else bad "legacy Amp update enabled Claude hooks"; fi
@@ -189,7 +189,7 @@ FAKE
 chmod +x "$RELOAD_BIN/launchctl"
 reload_env() {
   ( cd "$ROOT" && RELOAD_LOG="$RELOAD_LOG" HOME="$SBX5" \
-      PATH="$RELOAD_BIN:/usr/bin:/bin" bash "$INSTALL" "$@" )
+      PATH="$RELOAD_BIN:/usr/bin:/bin" NO_SETUP=1 bash "$INSTALL" "$@" )
 }
 
 # Establish an exact generated baseline, then make only Codex's installed plist
@@ -264,7 +264,7 @@ for e in 1000000001 1000000002 1000000003 1000000004 1000000005; do
   printf 'old\n' > "$brg.bak.$e"        # a pre-existing pile, oldest-first names
 done
 printf '\n# another edit\n' >> "$brg"
-( cd "$ROOT" && WITH_BRIDGE=1 HOME="$SBX" INSTALL_BAK_KEEP=2 bash "$INSTALL" ) >/dev/null 2>&1
+( cd "$ROOT" && WITH_BRIDGE=1 HOME="$SBX" INSTALL_BAK_KEEP=2 NO_SETUP=1 bash "$INSTALL" ) >/dev/null 2>&1
 if [ "$(nbak)" -le 2 ]; then ok "history pruned to INSTALL_BAK_KEEP ($(nbak) kept)"
 else bad "prune left $(nbak) backups, expected <= 2"; fi
 if [ -e "$brg".bak.1000000001 ]; then bad "prune kept the OLDEST backup"
@@ -276,7 +276,7 @@ echo "T13: an already-wired settings.json is not rewritten, backed up, or announ
 # up on the maintainer's box) plus a false "RESTART Claude Code" instruction.
 rm -f "$SETTINGS".bak.*
 before="$(cat "$SETTINGS")"
-out="$(cd "$ROOT" && WITH_BRIDGE=1 HOME="$SBX" bash "$INSTALL" 2>&1)"
+out="$(cd "$ROOT" && WITH_BRIDGE=1 HOME="$SBX" NO_SETUP=1 bash "$INSTALL" 2>&1)"
 if [ "$(cat "$SETTINGS")" = "$before" ]; then ok "settings.json byte-identical after a no-op run"
 else bad "settings.json was rewritten with no change to make"; fi
 nset=0; for f in "$SETTINGS".bak.*; do [ -e "$f" ] && nset=$((nset + 1)); done
@@ -289,6 +289,46 @@ case "$out" in *"already wired"*) ok "reports 'already wired' instead of a resta
 # that is not a claim about this run and must not fail the test.
 case "$out" in *"-> wired"*) bad "no-op run still claimed it wired the hooks";;
   *) ok "no misleading 'wired … RESTART' action line on a no-op run";; esac
+
+echo "T14: the installer finishes the job — and never fails because it tried"
+# Deploying files used to be the whole install; the first person to UPDATE saw
+# "✅ Files installed" and an unchanged sidebar, because the release's new meters
+# had no workspaces and setup was left as a manual step nobody knew to repeat.
+# Setup now runs automatically, which makes its FAILURE MODES load-bearing: an
+# install must still succeed on a machine with no cmux, or with a cmux that says
+# no. (Every other test in this file passes NO_SETUP=1 for exactly this reason —
+# otherwise `make test` would reach the developer's real cmux and create real
+# workspaces.)
+SBX6="$ROOT/home6"; mkdir -p "$SBX6"
+NOCMUX="$ROOT/nocmux"; mkdir -p "$NOCMUX"
+for t in jq install sed grep cat mkdir rm cp chmod printf date dirname basename cmp mv ln find sort head tail wc; do
+  src="$(command -v "$t" 2>/dev/null)" && ln -sf "$src" "$NOCMUX/$t" 2>/dev/null
+done
+out14="$( (cd "$ROOT" && HOME="$SBX6" PATH="$NOCMUX:/usr/bin:/bin" bash "$INSTALL") 2>&1 )"; rc14=$?
+if [ "$rc14" = 0 ]; then ok "no cmux on PATH → install still succeeds"; else bad "install failed with no cmux (rc $rc14)"; fi
+case "$out14" in *"cmux isn't on PATH"*) ok "says why setup was skipped" ;;
+  *) bad "skipped setup silently when cmux was absent" ;; esac
+if [ -f "$SBX6/bin/cmux-sentinel-setup.sh" ]; then ok "files still deployed without cmux"; else bad "no cmux meant no files"; fi
+
+SBX7="$ROOT/home7"; mkdir -p "$SBX7"
+out15="$( (cd "$ROOT" && HOME="$SBX7" NO_SETUP=1 bash "$INSTALL") 2>&1 )"; rc15=$?
+if [ "$rc15" = 0 ]; then ok "--no-setup/NO_SETUP still succeeds"; else bad "NO_SETUP install failed (rc $rc15)"; fi
+case "$out15" in *"Skipping setup"*) ok "NO_SETUP is announced, not silent" ;;
+  *) bad "NO_SETUP skipped without saying so" ;; esac
+
+# A cmux that exists but refuses everything must not fail the install: the files
+# are on disk either way, and telling someone their install failed when it didn't
+# is how you get a re-run that changes nothing.
+SBX8="$ROOT/home8"; mkdir -p "$SBX8"
+ANGRY="$ROOT/angry"; mkdir -p "$ANGRY"
+for t in jq install sed grep cat mkdir rm cp chmod printf date dirname basename cmp mv ln find sort head tail wc; do
+  src="$(command -v "$t" 2>/dev/null)" && ln -sf "$src" "$ANGRY/$t" 2>/dev/null
+done
+printf '#!/bin/bash\nexit 1\n' > "$ANGRY/cmux"; chmod +x "$ANGRY/cmux"
+out16="$( (cd "$ROOT" && HOME="$SBX8" PATH="$ANGRY:/usr/bin:/bin" bash "$INSTALL") 2>&1 )"; rc16=$?
+if [ "$rc16" = 0 ]; then ok "a cmux that rejects everything does not fail the install"; else bad "a refusing cmux failed the install (rc $rc16)"; fi
+case "$out16" in *"Re-run it by hand"*) ok "tells you setup needs re-running" ;;
+  *) bad "setup failure was not surfaced with a recovery command" ;; esac
 
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

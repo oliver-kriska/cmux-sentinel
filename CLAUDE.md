@@ -216,9 +216,9 @@ cmux sidebar validate workspaces && cmux sidebar reload   # synthetic interpreta
 make sidebar-live                     # mount repo sidebar against live data; human visual verdict
 
 # offline tests (stub cmux/security/curl/$HOME — run in CI too)
-make test   # bridge-state(58) poller-gate(109) codex-poller(83) install-hooks(52) sentinel-setup(69)
-            # sentinel-doctor(41) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
-            # amp-bridge(43) amp-poller(49) = 589 assertions total
+make test   # bridge-state(58) poller-gate(109) codex-poller(83) install-hooks(59) sentinel-setup(69)
+            # sentinel-doctor(49) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
+            # amp-bridge(43) amp-poller(49) = 604 assertions total
 ```
 
 ## Architecture / where things live
@@ -492,6 +492,27 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
   Complementing it, `bin/cmux-sentinel-doctor.sh` reads the plist's `StandardErrorPath` and prints the
   newest `ERR:` line under a stale provider, so "stale — and now what?" answers itself. Regression
   tests: `tests/poller-gate.sh` T7–T9, `tests/sentinel-doctor.sh` T8.
+- **`install.sh` FINISHES THE JOB — deploying files is not an install.** It used to copy files and
+  print six manual steps; step 1 (`cmux-sentinel-setup.sh`) is idempotent, fail-open and needs no
+  input, so leaving it manual bought nothing and cost everything: an UPDATE printed
+  "✅ Files installed" and changed nothing visible, because the new release's meters had no
+  workspaces. That is what a successful install looked like to the first person who updated.
+  Setup now runs automatically, then every enabled provider is painted and the sidebar reloaded.
+  **Because it is automatic, ITS failure modes are now the installer's** — all three steps are
+  best-effort and NON-FATAL (no cmux on PATH, a cmux that refuses, no creds), each with a printed
+  recovery, and `--no-setup`/`NO_SETUP=1` opts out. **`tests/install-hooks.sh` must pass
+  `NO_SETUP=1` on every invocation**: it sandboxes `$HOME` but NOT `$PATH`, so without it
+  `make test` reaches the developer's REAL cmux and creates REAL workspaces. T14 covers the
+  skip/failure paths deliberately.
+- **The installed version is stamped and reported.** `VERSION` in the repo → written to
+  `~/.config/cmux-sentinel/VERSION` (version + date + short sha) at install; the doctor prints it
+  and asks GitHub whether a newer one is published. Three constraints, each learned rather than
+  assumed: the remote check is **fail-silent on every can't-tell path** (offline, rate limited, an
+  HTML error page — a health report must never error because GitHub was slow); the comparison is
+  **numeric per component** (`sort -t. -k1,1n -k2,2n -k3,3n`, so `0.10.0 > 0.9.0`, which a string
+  compare gets wrong); and being **AHEAD** of the published version is not an update, or every dev
+  machine gets nagged to downgrade. `CMUX_SENTINEL_UPDATE_CHECK=0` disables it. Keep `CHANGELOG.md`
+  current with `VERSION` — the doctor's warning points at it.
 - **launchd does not reread a changed loaded plist.** `install.sh` compares generated plist content,
   leaves unchanged jobs alone, and by default prints exact `bootout` + `bootstrap` commands for a
   changed+loaded job. `--reload-agents` / `RELOAD_AGENTS=1` explicitly performs only those targeted

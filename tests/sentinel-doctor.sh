@@ -108,7 +108,15 @@ cat > "$ROOT/bin/amp" <<'FAKE'
 [ "$1" = usage ] || exit 0
 printf '%s\n' 'Subscription Test: 88% other usage and 100% orb usage remaining - resets upon renewal in 1 month'
 FAKE
-chmod +x "$ROOT/bin/cmux" "$ROOT/bin/security" "$ROOT/bin/launchctl" "$ROOT/bin/codex" "$ROOT/bin/amp"
+# Fake curl: the doctor asks GitHub whether a newer VERSION exists. Stub it so the
+# suite never touches the network AND so the update-available path is testable.
+# STUB_LATEST is what raw.githubusercontent "returns"; unset = unreachable.
+cat > "$ROOT/bin/curl" <<'FAKE'
+#!/bin/bash
+[ -n "${STUB_LATEST:-}" ] || exit 7
+printf '%s\n' "$STUB_LATEST"
+FAKE
+chmod +x "$ROOT/bin/cmux" "$ROOT/bin/security" "$ROOT/bin/launchctl" "$ROOT/bin/codex" "$ROOT/bin/amp" "$ROOT/bin/curl"
 
 PATH="$ROOT/bin:/usr/bin:/bin"; export PATH
 out="$(bash "$DOCTOR" 2>&1)"; rc=$?
@@ -261,6 +269,43 @@ echo "T11: a present spend sentinel is never nagged about"
 case "$out7" in *"'spend' sentinel present"*) ok "an existing spend sentinel reports as healthy";;
   *"no 'spend' sentinel"*) ok "an absent spend sentinel is reported, not silently ignored";;
   *) bad "the doctor says nothing at all about the spend meter";; esac
+
+echo "T12: the doctor answers \"is the fix in my copy?\" without a chat round-trip"
+vf="$HOME/.config/cmux-sentinel/VERSION"
+mkdir -p "$(dirname "$vf")"
+out9="$(bash "$DOCTOR" 2>&1)"
+case "$out9" in *"no version stamp"*) ok "an unstamped install says so, and how to fix it";;
+  *) bad "an unstamped install reported no version at all";; esac
+
+printf 'version=0.2.0\ninstalled=2026-08-25\ncommit=abc1234\n' > "$vf"
+out10="$(STUB_LATEST=0.2.0 bash "$DOCTOR" 2>&1)"
+case "$out10" in *"cmux-sentinel v0.2.0 (installed 2026-08-25, abc1234)"*) ok "reports version, date and commit";;
+  *) bad "version stamp was not reported";; esac
+case "$out10" in *"is available"*) bad "offered an update while already current";;
+  *) ok "no update noise when you are current";; esac
+
+# 0.10.0 > 0.9.0 — the comparison must be numeric per component, not lexical.
+printf 'version=0.9.0\ninstalled=2026-08-25\ncommit=abc1234\n' > "$vf"
+out11="$(STUB_LATEST=0.10.0 bash "$DOCTOR" 2>&1)"
+case "$out11" in *"v0.10.0 is available (you have v0.9.0)"*) ok "a newer release is reported, compared numerically";;
+  *) bad "0.10.0 was not recognised as newer than 0.9.0";; esac
+
+# Being AHEAD of the published version (a dev machine) is not an update.
+printf 'version=0.3.0\ninstalled=2026-08-25\ncommit=abc1234\n' > "$vf"
+out12="$(STUB_LATEST=0.2.0 bash "$DOCTOR" 2>&1)"
+case "$out12" in *"is available"*) bad "told a dev machine to downgrade";;
+  *) ok "running ahead of the release is not an update";; esac
+
+# Every can't-tell path must be SILENT — a health report that errors because
+# GitHub was slow is worse than one that says nothing about updates.
+out13="$(STUB_LATEST="<html>404</html>" bash "$DOCTOR" 2>&1)"; rc13=$?
+if [ "$rc13" = 0 ]; then ok "a garbage response does not fail the doctor"; else bad "garbage update response failed the doctor (rc $rc13)"; fi
+case "$out13" in *"is available"*) bad "treated an HTML error page as a version";;
+  *) ok "a non-version response is ignored";; esac
+out14="$(CMUX_SENTINEL_UPDATE_CHECK=0 STUB_LATEST=9.9.9 bash "$DOCTOR" 2>&1)"
+case "$out14" in *"is available"*) bad "checked for updates with the check turned off";;
+  *) ok "CMUX_SENTINEL_UPDATE_CHECK=0 skips the network entirely";; esac
+rm -f "$vf"
 
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

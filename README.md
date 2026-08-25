@@ -220,8 +220,13 @@ also require that provider's CLI/account credentials.
 
 ## Updating
 
-There's no separate updater — **re-run the installer**. It re-deploys every file and backs up
-what it replaces.
+There's no separate updater — **re-run the installer**. It re-deploys every file, backs up what it
+replaces, then **finishes the job**: it re-runs setup (so a release that adds a meter gets its
+workspace, and the sentinels are re-parked out of ⌘1…⌘9), repaints every enabled provider, and
+reloads the sidebar. Pass `--no-setup` if you want files only.
+
+Check what you have with `~/bin/cmux-sentinel-doctor.sh` — it reports the installed version and
+tells you when a newer one is published (`CMUX_SENTINEL_UPDATE_CHECK=0` turns the check off).
 
 ```bash
 # curl install — the bootstrap git-pulls ~/.cache/cmux-sentinel, then re-installs:
@@ -231,7 +236,7 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
 git -C cmux-sentinel pull && cmux-sentinel/install.sh
 ```
 
-Then `cmux sidebar reload` to repaint. Notes:
+Notes:
 
 - An **already-installed bridge updates automatically** on a plain re-run — no `WITH_BRIDGE=1`
   needed (that flag is only for *adding* the bridge the first time).
