@@ -12,15 +12,15 @@
 SHELL   := bash
 SCRIPTS := bin/cmux-sentinel bin/cmux-claude-usage.sh bin/cmux-codex-usage.sh bin/cmux-amp-usage.sh bin/cmux-sentinel-doctor.sh \
            bin/cmux-sentinel-setup.sh bin/cmux-sidebar-live-smoke.sh bin/cmux-group-sync.sh hooks/cmux-bridge.sh \
-           install.sh scripts/check-secrets.sh \
+           install.sh scripts/check-secrets.sh scripts/make-formula.sh \
            hooks/zed-bridge.sh bin/cmux-open-in-zed.sh bin/zed-usage-tui.sh \
            tests/bridge-state.sh tests/poller-gate.sh tests/codex-poller.sh \
            tests/install-hooks.sh tests/sentinel-setup.sh tests/sentinel-doctor.sh tests/group-sync.sh \
            tests/zed-bridge.sh tests/open-in-zed.sh tests/usage-tui.sh \
-           tests/amp-bridge.sh tests/amp-poller.sh tests/entrypoint.sh
+           tests/amp-bridge.sh tests/amp-poller.sh tests/entrypoint.sh tests/formula.sh
 MD      := $(wildcard *.md) $(wildcard docs/*.md)
 
-.PHONY: help check ci lint shellcheck secrets markdown test doctor sidebar sidebar-live fmt fmt-check
+.PHONY: help check ci lint shellcheck secrets markdown formula test doctor sidebar sidebar-live fmt fmt-check
 
 help:
 	@echo "make check   — shellcheck + secrets + markdown + test + sidebar (full local gate)"
@@ -50,6 +50,12 @@ MDLINT_VERSION := 0.47.0
 markdown:
 	@if command -v markdownlint >/dev/null 2>&1; then 	  echo "markdownlint $(MD)"; markdownlint $(MD); 	elif command -v npx >/dev/null 2>&1; then 	  echo "markdownlint not on PATH (node version switch?) — falling back to npx markdownlint-cli@$(MDLINT_VERSION)"; 	  npx --yes markdownlint-cli@$(MDLINT_VERSION) $(MD); 	else 	  echo "markdownlint-cli@$(MDLINT_VERSION) is missing and npx is unavailable." >&2; 	  echo "  npm install -g markdownlint-cli@$(MDLINT_VERSION)     # per node version" >&2; 	  echo "  mise use -g npm:markdownlint-cli@$(MDLINT_VERSION)    # survives a node switch" >&2; 	  exit 1; 	fi
 
+# packaging: the committed Homebrew formula must agree with VERSION. Offline and
+# tolerant of "no formula yet" — the formula hashes a tag, so it cannot exist
+# before the release it describes.
+formula:
+	@./scripts/make-formula.sh --check
+
 # state machines: offline, stub cmux/security/curl, run on Linux CI too.
 #   bridge-state  — agent activity markers (⚡/⏳/❓)
 #   poller-gate   — Claude usage-poller gating + malformed-value clamping + bare-label resolve
@@ -63,6 +69,8 @@ markdown:
 #   zed-bridge     — zed-bridge.sh Zed OSC-title + JSON status sinks (agent markers, notify gating, toggles)
 #   open-in-zed    — cmux-open-in-zed.sh cmux→Zed handoff (worktree-aware command composition, modes, exec)
 #   usage-tui      — zed-usage-tui.sh terminal-pane meters (bar render, %, dots, provider gating, offline)
+#   entrypoint     — cmux-sentinel dispatcher (routing, arg/exit pass-through, brew layout, deploy)
+#   formula        — Homebrew formula generator: version agreement, offline --check
 #   amp-bridge's adapter compatibility harness uses Node.js (test-only; preinstalled in CI)
 test:
 	bash tests/bridge-state.sh
@@ -78,6 +86,7 @@ test:
 	bash tests/amp-bridge.sh
 	bash tests/amp-poller.sh
 	bash tests/entrypoint.sh
+	bash tests/formula.sh
 
 # health-check the live setup (read-only) — bridge/hooks/launchd/automation/sentinels.
 doctor:
@@ -114,9 +123,9 @@ sidebar:
 sidebar-live:
 	@./bin/cmux-sidebar-live-smoke.sh
 
-check: shellcheck secrets markdown test sidebar
+check: shellcheck secrets markdown formula test sidebar
 lint: check
-ci: shellcheck secrets markdown test   ## CI omits `sidebar` (no cmux on the runner)
+ci: shellcheck secrets markdown formula test   ## CI omits `sidebar` (no cmux on the runner)
 
 # shfmt is OPT-IN, not a gate: the scripts use a deliberately terse one-liner
 # style (`die() { echo ...; exit 1; }`) that shfmt would explode. Run this only

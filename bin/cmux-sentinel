@@ -19,6 +19,16 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CANDIDATES=("$HERE" "$HERE/../libexec/cmux-sentinel" "$HOME/bin")
 REPO_URL="https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/install.sh"
 
+# A source TREE (root of a checkout) rather than a directory of scripts: `deploy`
+# needs install.sh plus sidebars/ and hooks/, which only exist together. Homebrew
+# stages the whole tree under libexec, so $HERE/.. covers both it and a checkout;
+# a ~/bin install has no tree, and falls back to the curl bootstrap's clone.
+TREES=("$HERE/.." "$HERE/../libexec/cmux-sentinel" "${XDG_CACHE_HOME:-$HOME/.cache}/cmux-sentinel")
+
+# Homebrew owns the file it installed; re-running the curl installer over the top
+# would leave brew reporting a version it no longer controls.
+brew_owned() { case "$HERE" in */Cellar/cmux-sentinel/*) return 0 ;; *) return 1 ;; esac; }
+
 die() { echo "cmux-sentinel: $*" >&2; exit 1; }
 
 # Find a helper script by name, or fail with the paths actually searched — a
@@ -32,6 +42,16 @@ resolve() { # $1 = script filename
 }
 
 run() { local s; s="$(resolve "$1")" || exit 1; shift; exec "$s" "$@"; }
+
+# install.sh is the ONE deployer; `deploy` locates it rather than reimplementing
+# the copy/backup/plist/hook logic, which has its own 59-assertion test suite.
+resolve_tree() {
+  local d
+  for d in "${TREES[@]}"; do
+    [ -f "$d/install.sh" ] && [ -f "$d/bin/cmux-claude-usage.sh" ] && { (cd "$d" && pwd); return 0; }
+  done
+  return 1
+}
 
 usage_all() {
   # Each poller self-gates and exits 0 silently when its provider is disabled or
@@ -69,6 +89,7 @@ cmux-sentinel — cmux sidebar with agent-state rows and AI usage meters
   cmux-sentinel doctor          health-check the whole pipeline (read-only)
   cmux-sentinel usage           print every enabled provider's usage
   cmux-sentinel paint           refresh the meters now (what launchd does every 5 min)
+  cmux-sentinel deploy          copy this version's files into ~/bin and ~/.config
   cmux-sentinel update          fetch the latest release and re-install it
   cmux-sentinel version         what you have installed
   cmux-sentinel group-sync      sync workspace-GROUP names onto their anchor rows
@@ -97,9 +118,22 @@ case "$cmd" in
       && echo "meters repainted, sidebar reloaded" \
       || echo "meters repainted (couldn't reach cmux to reload the sidebar)"
     ;;
+  deploy)
+    # Homebrew (and `git pull`) update the TREE; nothing under $HOME moves until
+    # the installer runs. The meters live in ~/bin because four LaunchAgents call
+    # them by absolute path, so "upgraded" without this step means new code sitting
+    # in the Cellar while launchd keeps running the old copy — invisibly.
+    t="$(resolve_tree)" || die "no source tree beside this script (looked in: ${TREES[*]}). Use \`cmux-sentinel update\` to fetch one."
+    exec "$t/install.sh" "$@"
+    ;;
   update)
     # The installer's own bootstrap git-pulls the cache and re-execs, so this is
     # the documented update path rather than a second implementation of it.
+    if brew_owned; then
+      echo "This copy is managed by Homebrew. Update it with:" >&2
+      echo "  brew upgrade cmux-sentinel && cmux-sentinel deploy" >&2
+      exit 1
+    fi
     command -v curl >/dev/null 2>&1 || die "curl is required to update"
     echo "Fetching the latest cmux-sentinel…"
     curl -fsSL "$REPO_URL" | bash -s -- "$@"

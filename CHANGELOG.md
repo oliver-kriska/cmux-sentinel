@@ -25,6 +25,11 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
   `setup`, `doctor`, `version`, `usage`, `paint`, `update`, `group-sync`, `zed` — instead of nine
   script names. It dispatches to the existing `cmux-*.sh` scripts, which stay exactly where they
   are and keep working when called directly (the LaunchAgents reference them by absolute path).
+- **`cmux-sentinel deploy` and Homebrew packaging.** `deploy` re-runs the installer from whatever
+  tree the command was installed from, which is what makes a `brew`-managed copy possible: the
+  formula owns the files under its prefix, and `deploy` puts them where launchd and cmux expect
+  them. `update` now refuses on a Homebrew-managed copy and points at `brew upgrade` instead.
+  Publishing the tap is documented in `docs/release.md`.
 - **`cmux-sentinel version` and a version stamp.** The installer records the version, install date
   and commit under `~/.config/cmux-sentinel/VERSION`; the doctor header prints it and tells you
   when a newer release is published (`CMUX_SENTINEL_UPDATE_CHECK=0` turns the check off).

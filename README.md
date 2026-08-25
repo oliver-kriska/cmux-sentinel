@@ -229,7 +229,8 @@ cmux-sentinel doctor           # read-only health report for the whole pipeline
 cmux-sentinel version          # what's installed, when, from which commit
 cmux-sentinel usage            # --print every enabled provider (read-only; add --raw etc.)
 cmux-sentinel paint            # --update every enabled provider (writes the meters now)
-cmux-sentinel update           # re-run the installer from the git checkout
+cmux-sentinel deploy           # (re-)install this version's files into ~/bin and ~/.config
+cmux-sentinel update           # fetch the latest release and install it
 cmux-sentinel group-sync --list
 cmux-sentinel zed              # open Zed on the current worktree (opt-in helper)
 ```
@@ -515,7 +516,8 @@ bin/cmux-amp-usage.sh        Amp monthly-allowance poller — `amp usage` parser
 bin/cmux-sentinel-setup.sh   idempotently create the meter sentinel workspaces (+ auto-naming guard)
 bin/cmux-group-sync.sh       workspace-group name → anchor-title sync (opt-in; --list | --raw | --update)
 bin/cmux-sentinel-doctor.sh  read-only, multi-window health-check of the whole pipeline
-bin/cmux-sentinel            one entry point: `cmux-sentinel setup|doctor|version|usage|paint|update|...`
+bin/cmux-sentinel            one entry point: `cmux-sentinel setup|doctor|version|usage|paint|deploy|...`
+scripts/make-formula.sh      generate/verify the Homebrew formula for a tag (see docs/release.md)
 sidebars/workspaces.swift    the sidebar (the opinionated design + USAGE panels)
 hooks/cmux-bridge.sh         shared ref-counted agent-state bridge
 hooks/amp-bridge.ts          Amp plugin adapter → shared bridge
@@ -532,7 +534,9 @@ tests/zed-bridge.sh          offline OSC/JSON state bridge tests
 tests/open-in-zed.sh         offline worktree-aware Zed handoff tests
 tests/usage-tui.sh           offline provider/rendering tests for the Zed usage TUI
 tests/entrypoint.sh          offline dispatcher tests (routing, arg + exit-status pass-through)
+tests/formula.sh             offline formula-generator tests (version agreement, no network)
 examples/                    usage-sentinels.env + launchd templates (Claude + Codex + Amp + group-sync)
+packaging/homebrew/          the tap's formula (generated — see docs/release.md)
 VERSION, CHANGELOG.md        release stamp; install.sh records it under ~/.config/cmux-sentinel/
 install.sh                   file placement + next-steps
 ```

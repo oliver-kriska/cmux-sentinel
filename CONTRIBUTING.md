@@ -70,6 +70,13 @@ brew install lefthook && lefthook install
 its title-label meter anchors. CI runs `make ci` on Ubuntu and validates every launchd template plus
 its installed-path substitution with `plutil` on macOS.
 
+## Cutting a release
+
+`VERSION` + `CHANGELOG.md` + a `v<version>` tag, then regenerate the Homebrew formula from that tag
+(`scripts/make-formula.sh`; `make formula` checks the two agree, and is part of `make check`). The
+full sequence, and the four Homebrew constraints that are silent failures when ignored, are in
+[`docs/release.md`](docs/release.md).
+
 ## Ground rules
 
 - **Never commit secrets.** OAuth tokens are read from provider-owned local credential stores at
