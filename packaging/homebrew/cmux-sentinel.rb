@@ -2,8 +2,8 @@
 class CmuxSentinel < Formula
   desc "Opinionated cmux sidebar with agent-state rows and AI usage meters"
   homepage "https://github.com/oliver-kriska/cmux-sentinel"
-  url "https://github.com/oliver-kriska/cmux-sentinel/archive/refs/tags/v0.2.0.tar.gz"
-  sha256 "e7905009573ed36faf46bb3d83303d79aa7e52705c52388eb33a36bf845ef272"
+  url "https://github.com/oliver-kriska/cmux-sentinel/archive/refs/tags/v0.2.1.tar.gz"
+  sha256 "a8eeaea87202d986ab3dd57552b33aeb51219bedc0d8cde55cd72411a0614ef7"
   license "MIT"
 
   depends_on "jq"
