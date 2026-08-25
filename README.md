@@ -355,9 +355,15 @@ m7d 15%  · resets 3d 21h  (2026-08-28T09:59:59+00:00)  [Fable-scoped weekly cap
 
 Metering it is opt-in (`CLAUDE_MODEL_METER=1`, then re-run `~/bin/cmux-sentinel-setup.sh`) because
 the extra sentinel costs one of the ⌘1…⌘9 keys — the same rule that keeps the Amp orb meter off by
-default. The row renders as `m7d |Fable 15% (3d 21h)|██░░░░░░░░░░░░`: the label is a fixed anchor
-the sidebar matches on, and the model name comes from the payload, so it follows Anthropic if they
-re-scope the cap to a different model. If your account has no such cap, setup skips the sentinel
+default. The row renders with the model's own name as its label, beside the same `NN% (countdown)` every
+other meter shows:
+
+```text
+model-scoped weekly cap →   Fable        15% (3d 2h)
+```
+
+`m7d` is a fixed anchor the sidebar matches on; the name comes from the payload in its own title
+segment, so it follows Anthropic if they re-scope the cap to a different model. If your account has no such cap, setup skips the sentinel
 rather than parking a permanently-`n/a` row.
 
 ### Enable the Amp provider

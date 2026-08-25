@@ -256,11 +256,20 @@ func meterWindow(_ w) -> String {   // human label; title anchor remains unchang
   if w.title.hasPrefix("ampu ") { return "threads" }
   if w.title == "ampo" { return "orbs" }
   if w.title.hasPrefix("ampo ") { return "orbs" }
-  // Per-MODEL weekly cap. The left column says what KIND of window it is; the
-  // model's own name ("Fable") rides the detail text, because Anthropic re-scopes
-  // which model is capped and nothing here may hardcode it.
-  if w.title == "m7d" { return "model" }
-  if w.title.hasPrefix("m7d ") { return "model" }
+  // Per-MODEL weekly cap. The model's own name IS the label — "Fable", not
+  // "model Fable", so the row keeps the one-word rhythm of every other meter. It
+  // can never be a literal here (Anthropic re-scopes which model is capped and
+  // scope.model.id is null), so the poller writes it as a 4th title segment:
+  //   m7d |15% (3d 2h)|▉▉░░░|Fable
+  // Split on "|" rather than on the detail's first space, so a name with a space
+  // in it survives. Anything without that segment — the bare bootstrap title, an
+  // "⚠ offline" stamp — falls back to the generic word.
+  if w.title == "m7d" { return "model" }   // bootstrap: created, never painted yet
+  if w.title.hasPrefix("m7d ") {
+    let parts = w.title.split(separator: "|")
+    if parts.count > 3 { return String(parts[3]) }
+    return "model"
+  }
   // Extra-usage spend. Only ever drawn when there IS spend — a zero balance is
   // filtered out upstream by isZeroSpend — so this never labels an empty row.
   if w.title == "spend" { return "credits" }

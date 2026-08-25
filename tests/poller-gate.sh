@@ -318,13 +318,19 @@ cknothas "opt-out update writes no m7d title" "m7d"
 reset
 STUB_CURL="ok" STUB_SCOPED=15 STUB_M7D=1 CLAUDE_MODEL_METER=1 bash "$POLLER" --update >/dev/null
 ckcode "opted-in update succeeds" "$?" 0
-ckhas "m7d row carries the payload's model name" "m7d |Fable 15%"
+# The sidebar draws the model name as the ROW LABEL and reads it from the 4th "|"
+# segment, so the position is a contract, not cosmetics: put the name back in the
+# detail and the row renders "model  Fable 15% (3d 2h)", saying it twice.
+ckhas "m7d detail segment is pure metrics" "^m7d |15% ("
+ckhas "…and the model name is the LAST segment, where the sidebar reads it" "|Fable$"
+cknothas "the model name is NOT prefixed onto the detail" "|Fable 15%"
 ckprog "m7d native progress value (15% → 0.15)" "PROG 0.15"
+ckprognothas "the native label is pure metrics — the name is the row label" "Fable"
 # The model name must come from the payload — Anthropic re-scopes which model is
 # capped, and scope.model.id is null, so display_name is the only handle there is.
 reset
 STUB_CURL="ok" STUB_SCOPED=88 STUB_SCOPED_NAME="Zephyr" STUB_M7D=1 CLAUDE_MODEL_METER=1 bash "$POLLER" --update >/dev/null
-ckhas "a renamed model follows the payload, not a hardcoded name" "m7d |Zephyr 88%"
+ckhas "a renamed model follows the payload, not a hardcoded name" "|Zephyr$"
 cknothas "no stale model name leaks into the row" "Fable"
 
 # Opted in, but this account has no model-scoped cap: honest 'n/a', never a

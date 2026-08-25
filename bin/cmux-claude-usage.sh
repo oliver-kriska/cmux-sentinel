@@ -621,14 +621,19 @@ main() {
       && { painted=$((painted + 1)); wrote="${wrote}${LABEL_7D}=${sd_pct}% (${sd_human})  "; }
     if [ "$MODEL_METER" = 1 ]; then
       if [ -n "$m_pct" ]; then
-        # The MODEL NAME rides the detail text, never the anchor: the anchor has to
-        # be a static .hasPrefix literal in the sidebar, and Anthropic can rename or
-        # re-scope the capped model at will (scope.model.id is null — display_name
-        # is the only handle there is).
+        # The MODEL NAME gets its OWN title segment, never the anchor and never the
+        # detail. Not the anchor because that has to be a static .hasPrefix literal
+        # in the sidebar, and Anthropic can rename or re-scope the capped model at
+        # will (scope.model.id is null — display_name is the only handle there is).
+        # Not the detail because the sidebar draws the name as the ROW LABEL, where
+        # every other meter shows one word ("session", "week", "threads"); prefixing
+        # the detail instead rendered "model  Fable 15% (3d 2h)", saying it twice.
+        # A 4th `|` segment survives a name containing spaces, which splitting the
+        # detail on its first space would not.
         local m_bar m_dot m_frac m_lbl
         m_bar=$(make_bar "$m_pct" 14); m_dot=$(sev_dot "$m_pct"); m_frac=$(to_frac "$m_pct")
-        m_lbl="${m_name} ${m_pct}% (${m_human})${m_dot}"
-        paint_meter "$LABEL_M7D" "$LABEL_M7D |${m_lbl}|${m_bar}" "$m_frac" "$m_lbl" \
+        m_lbl="${m_pct}% (${m_human})${m_dot}"
+        paint_meter "$LABEL_M7D" "$LABEL_M7D |${m_lbl}|${m_bar}|${m_name}" "$m_frac" "$m_lbl" \
           && { painted=$((painted + 1)); wrote="${wrote}${LABEL_M7D}=${m_pct}% (${m_human})  "; }
       else
         # Opted in, but this account currently has no model-scoped cap. Not an error

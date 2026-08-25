@@ -216,9 +216,9 @@ cmux sidebar validate workspaces && cmux sidebar reload   # synthetic interpreta
 make sidebar-live                     # mount repo sidebar against live data; human visual verdict
 
 # offline tests (stub cmux/security/curl/$HOME — run in CI too)
-make test   # bridge-state(58) poller-gate(106) codex-poller(83) install-hooks(52) sentinel-setup(64)
+make test   # bridge-state(58) poller-gate(109) codex-poller(83) install-hooks(52) sentinel-setup(64)
             # sentinel-doctor(40) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
-            # amp-bridge(43) amp-poller(49) = 580 assertions total
+            # amp-bridge(43) amp-poller(49) = 583 assertions total
 ```
 
 ## Architecture / where things live
@@ -381,8 +381,11 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
   parsed ONLY for the new row, because adding a feature must never put a proven meter at risk.
   **(2) never hardcode the model name.** `scope.model.id` is `null`, so `display_name` is the
   only handle, and Anthropic re-scopes which model is capped at will. The name therefore rides
-  the title's DETAIL text (`m7d |Fable 15% (3d 21h)|▉…`), never the anchor — the sidebar anchor
-  has to be a static `.hasPrefix` literal. **(3) `seven_day_opus`/`seven_day_sonnet` exist as
+  its OWN 4th title segment — `m7d |15% (3d 2h)|▉…|Fable` — never the anchor (that has to be a
+  static `.hasPrefix` literal) and never the detail. The sidebar draws it as the ROW LABEL,
+  where every other meter shows one word ("session", "week", "threads"); prefixing the detail
+  instead shipped a row reading `model  Fable 15% (3d 2h)`, saying it twice. Split on `|`, not
+  on the detail's first space, so a name containing a space survives. **(3) `seven_day_opus`/`seven_day_sonnet` exist as
   top-level keys and are `null`** — reading those is exactly the "renders empty ≠ unreachable"
   mistake this file keeps warning about; a non-null `weekly_scoped` row is the only proof.
   Off by default (`CLAUDE_MODEL_METER=1`) for the same reason as the Amp orb meter: the sentinel
