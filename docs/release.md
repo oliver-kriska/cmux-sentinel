@@ -9,7 +9,8 @@ disagree about what "0.x.y" means.
 ```bash
 echo 0.3.0 > VERSION
 $EDITOR CHANGELOG.md      # a section per version; the doctor's update warning points here
-make check                # `make formula` will say "none yet (v0.3.0 not released)" — expected
+make check                # `make formula` notes the formula still describes the previous
+                          # release and that v0.3.0 is not tagged yet — expected here
 git commit -am "Release 0.3.0"
 git push
 ```
@@ -45,21 +46,23 @@ before its tag. A formula that exists and disagrees with `VERSION` is the real b
 
 ## 4. Publish to the tap
 
-The tap is a separate repository (`<owner>/homebrew-<name>`), because that is how `brew tap`
-resolves a name. Homebrew expects the formula under `Formula/`:
+The tap is a separate repository — [`oliver-kriska/homebrew-tap`](https://github.com/oliver-kriska/homebrew-tap) —
+because `brew tap <owner>/<name>` resolves to `<owner>/homebrew-<name>`. It is shared across
+projects, and Homebrew expects the formula under `Formula/`:
 
 ```bash
-cp packaging/homebrew/cmux-sentinel.rb ../homebrew-<name>/Formula/cmux-sentinel.rb
-git -C ../homebrew-<name> commit -am "cmux-sentinel 0.3.0" && git -C ../homebrew-<name> push
+git clone https://github.com/oliver-kriska/homebrew-tap.git   # once
+cp packaging/homebrew/cmux-sentinel.rb homebrew-tap/Formula/cmux-sentinel.rb
+git -C homebrew-tap commit -am "cmux-sentinel 0.3.0" && git -C homebrew-tap push
 ```
 
 Then verify against a real Homebrew, not just by reading:
 
 ```bash
-brew untap <owner>/<name> 2>/dev/null; brew tap <owner>/<name>
-brew install --build-from-source cmux-sentinel   # runs def install
-brew test cmux-sentinel                          # runs the test block
-brew audit --strict --online <owner>/<name>/cmux-sentinel
+brew update && brew upgrade cmux-sentinel        # or: brew tap oliver-kriska/tap && brew install …
+brew test cmux-sentinel                          # runs the formula's test block
+brew audit --strict --online oliver-kriska/tap/cmux-sentinel
+cmux-sentinel version                            # brew version AND deployed stamp; warns if they differ
 ```
 
 ## What Homebrew does and does not do
@@ -71,7 +74,7 @@ sidebar in `~/.config/cmux/sidebars`, the pollers in `~/bin`, four LaunchAgents 
 So the install is two commands, and the second one is not optional:
 
 ```bash
-brew install <owner>/<name>/cmux-sentinel
+brew install oliver-kriska/tap/cmux-sentinel
 cmux-sentinel deploy          # runs the tree's own install.sh: files, hooks, agents, sentinels
 ```
 

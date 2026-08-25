@@ -31,6 +31,13 @@ has() { case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac; }
 # without touching the real one.
 WORK="$ROOT/repo"; mkdir -p "$WORK/scripts" "$WORK/packaging/homebrew"
 cp "$GEN" "$WORK/scripts/make-formula.sh"
+# A real (empty) repo, because the check keys on whether the version is TAGGED —
+# and `git` walks up, so an uninitialised temp dir would silently inherit
+# whatever repo happens to enclose $TMPDIR.
+git -C "$WORK" init -q >/dev/null 2>&1
+git -C "$WORK" -c user.email=t@example.invalid -c user.name=t \
+  commit -q --allow-empty -m base >/dev/null 2>&1
+tag() { git -C "$WORK" tag "$1" >/dev/null 2>&1; }
 SHA64="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 mkformula() { # $1 = version  $2 = sha256 field contents
@@ -55,14 +62,31 @@ out="$("$WORK/scripts/make-formula.sh" --check 2>&1)"; rc=$?
 if [ "$rc" = 0 ]; then ok "matching formula passes"; else bad "matching formula failed: $out"; fi
 if has "$out" "v0.2.0"; then ok "reports the version it verified"; else bad "did not report the version: $out"; fi
 
-echo "T3: a stale formula fails and names BOTH versions"
-# The whole point: after a version bump, the committed formula still points at
-# the previous tag until it is regenerated.
+echo "T3: a bump that is not tagged yet is the normal in-progress state"
+# The release commit itself bumps VERSION while the formula still describes the
+# last release. Failing here would block the very commit that starts a release.
 echo "0.3.0" > "$WORK/VERSION"
 out="$("$WORK/scripts/make-formula.sh" --check 2>&1)"; rc=$?
-if [ "$rc" != 0 ]; then ok "a stale formula fails the gate"; else bad "stale formula passed"; fi
+if [ "$rc" = 0 ]; then ok "an untagged bump does not block the gate"; else bad "untagged bump failed: $out"; fi
+if has "$out" "0.2.0"; then ok "names the version the formula describes"; else bad "did not name the formula's version: $out"; fi
+if has "$out" "not tagged"; then ok "says why it is allowed to lag"; else bad "did not explain the lag: $out"; fi
+
+echo "T3b: once the tag exists, a stale formula FAILS and names both versions"
+# From here a tap would serve the previous release — which looks exactly like a
+# successful `brew upgrade`, so it has to be loud.
+tag v0.3.0
+out="$("$WORK/scripts/make-formula.sh" --check 2>&1)"; rc=$?
+if [ "$rc" != 0 ]; then ok "a stale formula for a released tag fails"; else bad "stale formula passed after tagging"; fi
 if has "$out" "0.2.0"; then ok "names the version the formula has"; else bad "did not name the formula's version: $out"; fi
 if has "$out" "0.3.0"; then ok "names the version it should have"; else bad "did not name VERSION: $out"; fi
+
+echo "T3c: a formula AHEAD of VERSION always fails"
+# VERSION going backwards (a bad revert) can't be explained away by "not tagged".
+mkformula 0.4.0 "$SHA64"
+out="$("$WORK/scripts/make-formula.sh" --check 2>&1)"; rc=$?
+if [ "$rc" != 0 ]; then ok "a formula ahead of VERSION fails"; else bad "formula ahead of VERSION passed"; fi
+if has "$out" "backwards"; then ok "says VERSION went backwards"; else bad "unclear message: $out"; fi
+mkformula 0.2.0 "$SHA64"
 
 echo "T4: a placeholder sha256 never ships"
 mkformula 0.3.0 "REPLACE_ME"

@@ -313,9 +313,17 @@ fi
 # Record WHAT was installed, so "is the fix in my copy?" is answerable without
 # asking the maintainer. The git sha is best-effort: the curl bootstrap installs
 # from a clone (so it has one), a tarball install does not.
+#
+# `git -C` WALKS UP, and a Homebrew tarball unpacks under /opt/homebrew, which is
+# itself a git repo — so an unguarded rev-parse would stamp Homebrew's HEAD and
+# confidently report a sha that has nothing to do with this tool. Only trust a sha
+# when the tree we are installing from IS the repo root.
 if [ -f "$here/VERSION" ]; then
   mkdir -p "$HOME/.config/cmux-sentinel"
-  _sha="$(git -C "$here" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  _sha=unknown
+  if [ "$(git -C "$here" rev-parse --show-toplevel 2>/dev/null)" = "$here" ]; then
+    _sha="$(git -C "$here" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  fi
   printf 'version=%s\ninstalled=%s\ncommit=%s\n' \
     "$(cat "$here/VERSION")" "$(date +%Y-%m-%d)" "$_sha" \
     > "$HOME/.config/cmux-sentinel/VERSION"

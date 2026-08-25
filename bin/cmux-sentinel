@@ -72,13 +72,27 @@ usage_all() {
 }
 
 show_version() {
-  local f="$HOME/.config/cmux-sentinel/VERSION"
+  local f="$HOME/.config/cmux-sentinel/VERSION" stamped="" rest cver
   if [ -f "$f" ]; then
     sed -n 's/^version=/cmux-sentinel /p;s/^installed=/  installed /p;s/^commit=/  commit    /p' "$f"
+    stamped="$(sed -n 's/^version=//p' "$f")"
   else
     echo "cmux-sentinel (no version stamp — installed before v0.2.0, or copied by hand)"
     echo "  re-run the installer to record one:  cmux-sentinel update"
   fi
+  # The stamp describes what is DEPLOYED — the pollers launchd actually runs. On
+  # a Homebrew install that can diverge from the copy you just typed: `brew
+  # upgrade` replaces the Cellar tree and changes nothing that is executing.
+  # Reporting only one of the two numbers is how "I upgraded" and "it's still
+  # broken" both stay true without anyone being able to see it.
+  if brew_owned; then
+    rest="${HERE#*/Cellar/cmux-sentinel/}"; cver="${rest%%/*}"
+    echo "  homebrew  $cver (this command)"
+    if [ -n "$stamped" ] && [ "$stamped" != "$cver" ]; then
+      echo "  ⚠ ~/bin is still $stamped — run 'cmux-sentinel deploy' to put $cver there"
+    fi
+  fi
+  return 0
 }
 
 help_text() {

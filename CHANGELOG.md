@@ -9,6 +9,23 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
 
 `~/bin/cmux-sentinel-doctor.sh` reports the version you actually have.
 
+## 0.2.1 — 2026-08-25
+
+### Added
+
+- **Homebrew tap.** `brew install oliver-kriska/tap/cmux-sentinel`, then `cmux-sentinel deploy`.
+  The second step is not optional and is needed after every `brew upgrade`: Homebrew owns the files
+  under its own prefix, while the sidebar, the pollers and four launchd agents live in `$HOME`.
+
+### Fixed
+
+- **`cmux-sentinel version` no longer reports a sha from an unrelated repository.** The installer
+  asked git for the commit of the tree it was installing from, and `git -C` walks up — so a
+  Homebrew install (unpacked under `/opt/homebrew`, itself a git repo) recorded *Homebrew's* HEAD.
+  It now records `commit=unknown` rather than a confident wrong answer.
+- **`version` on a Homebrew install shows what is deployed AND what brew has,** and says so when
+  they differ. Reporting one number is how "I upgraded" and "it's still broken" stay true at once.
+
 ## 0.2.0 — 2026-08-25
 
 ### Added

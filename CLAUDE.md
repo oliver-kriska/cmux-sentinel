@@ -217,9 +217,9 @@ cmux-sentinel doctor                   # dispatcher: setup/doctor/version/usage/
 make sidebar-live                     # mount repo sidebar against live data; human visual verdict
 
 # offline tests (stub cmux/security/curl/$HOME — run in CI too)
-make test   # bridge-state(58) poller-gate(109) codex-poller(83) install-hooks(59) sentinel-setup(69)
+make test   # bridge-state(58) poller-gate(109) codex-poller(83) install-hooks(62) sentinel-setup(69)
             # sentinel-doctor(49) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
-            # amp-bridge(43) amp-poller(49) entrypoint(26) formula(13) = 643 assertions total
+            # amp-bridge(43) amp-poller(49) entrypoint(33) formula(18) = 658 assertions total
 ```
 
 ## Architecture / where things live
@@ -556,12 +556,24 @@ Four things about it are non-obvious and each is a silent failure if you get it 
   cannot finish an upgrade: `cmux-sentinel deploy` re-runs the installer from the Cellar tree and
   refreshes `~/bin`. `update` REFUSES on a brew-managed copy (`*/Cellar/cmux-sentinel/*`) and names
   `brew upgrade` instead, so two updaters can't fight over `~/bin`.
+- **The version stamp must not borrow an ancestor repo's git sha.** `git -C <dir> rev-parse` walks
+  UP, and a formula unpacks under `/opt/homebrew`, which is itself a git repo — so the unguarded
+  call stamped **Homebrew's** HEAD: a precise, confident, entirely unrelated sha. `install.sh` now
+  trusts a sha only when `--show-toplevel` equals the tree it is installing from, and records
+  `commit=unknown` otherwise (`tests/install-hooks.sh` T15).
+- **`cmux-sentinel version` reports BOTH numbers on a brew install** — the deployed stamp (what
+  launchd runs) and the Cellar version (what you just typed) — and warns when they differ. Print
+  one and "I upgraded" / "it's still broken" are both true with no way to see it.
 - **The "now run deploy" message goes in `post_install`, not `caveats`.** Homebrew prints `caveats`
   only on the FIRST install — and the upgrade is exactly when the message matters.
 
-`make formula` (in `make check` and `ci`) asserts the committed formula's tag matches `VERSION`. It
-is offline and treats a MISSING formula as "not released yet" — the formula hashes a release tarball,
-so it cannot exist before its tag. A formula that exists and disagrees is the real bug.
+`make formula` (in `make check` and `ci`) keeps the committed formula honest, **offline**. It keys
+on whether the version is TAGGED, not merely on whether it matches: the formula describes the LAST
+RELEASE, so between a version bump and its tag it is legitimately behind — gating on equality alone
+would fail the release commit itself. Once `v$VERSION` exists locally, regenerating is mandatory.
+A missing formula is "not released yet"; a formula AHEAD of `VERSION` always fails (a bad revert).
+A shallow CI checkout has no tags and lands in the lenient arm — the gate that matters runs locally,
+where releases are cut.
 
 ## Conventions & security
 

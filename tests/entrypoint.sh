@@ -130,7 +130,25 @@ if [ "$rc" != 0 ]; then ok "no source tree is an error"; else bad "deploy with n
 if has "$out" "no source tree"; then ok "says there is no tree to deploy from"; else bad "unclear no-tree error: $out"; fi
 if has "$out" "cmux-sentinel update"; then ok "points at the command that fetches one"; else bad "no recovery offered"; fi
 
-echo "T9: a Homebrew-managed copy refuses to curl-install over itself"
+echo "T9: version distinguishes what is DEPLOYED from what you just typed"
+# The stamp is what launchd runs; the Cellar path is what brew last installed.
+# Print one number only and "I upgraded" / "it's still broken" are both true.
+out="$("$CELLAR/bin/cmux-sentinel" version 2>&1)"
+if has "$out" "0.2.0"; then ok "reports the deployed stamp"; else bad "lost the stamp: $out"; fi
+if has "$out" "homebrew  0.2.0"; then ok "names the Homebrew version in play"; else bad "did not report the brew version: $out"; fi
+if has "$out" "deploy"; then bad "warned about a mismatch when both are 0.2.0"; else ok "no warning when they agree"; fi
+# Now make them disagree — the state right after `brew upgrade`.
+NEWER="$ROOT/Cellar/cmux-sentinel/0.9.0"; mkdir -p "$NEWER/bin"
+cp "$ENTRY" "$NEWER/bin/cmux-sentinel"; chmod +x "$NEWER/bin/cmux-sentinel"
+out="$("$NEWER/bin/cmux-sentinel" version 2>&1)"
+if has "$out" "0.9.0"; then ok "reports the newer Homebrew version"; else bad "did not see the upgrade: $out"; fi
+if has "$out" "still 0.2.0"; then ok "says the deployed copy is behind"; else bad "silent about the stale deploy: $out"; fi
+if has "$out" "cmux-sentinel deploy"; then ok "names the command that fixes it"; else bad "no recovery offered: $out"; fi
+# A plain ~/bin install has no Cellar path and must not grow a phantom line.
+out="$("$AGG/cmux-sentinel" version 2>&1)"
+if has "$out" "homebrew"; then bad "reported Homebrew on a non-brew install"; else ok "non-brew install says nothing about brew"; fi
+
+echo "T10: a Homebrew-managed copy refuses to curl-install over itself"
 # Re-running the curl installer would overwrite ~/bin while brew still reports a
 # version it no longer controls — two updaters, one silently losing.
 out="$("$CELLAR/bin/cmux-sentinel" update 2>&1)"; rc=$?

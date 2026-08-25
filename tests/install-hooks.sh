@@ -330,5 +330,31 @@ if [ "$rc16" = 0 ]; then ok "a cmux that rejects everything does not fail the in
 case "$out16" in *"Re-run it by hand"*) ok "tells you setup needs re-running" ;;
   *) bad "setup failure was not surfaced with a recovery command" ;; esac
 
+echo "T15: the version stamp never borrows an ancestor repo's git sha"
+# `git -C <dir> rev-parse` WALKS UP. A Homebrew tarball unpacks under
+# /opt/homebrew, which is itself a git repo, so an unguarded rev-parse stamps
+# Homebrew's HEAD — a confident, precise, completely unrelated sha. Reproduce the
+# shape: a non-git tree nested inside a git repo.
+PREFIX="$ROOT/prefix"; mkdir -p "$PREFIX"
+git -C "$PREFIX" init -q >/dev/null 2>&1
+git -C "$PREFIX" -c user.email=t@example.invalid -c user.name=t \
+  commit -q --allow-empty -m ancestor >/dev/null 2>&1
+ancestor="$(git -C "$PREFIX" rev-parse --short HEAD 2>/dev/null)"
+TREE="$PREFIX/Cellar/cmux-sentinel/0.2.0"; mkdir -p "$TREE"
+( cd "$HERE/.." && tar --exclude=.git -cf - . ) | ( cd "$TREE" && tar xf - )
+SBX9="$ROOT/home9"; mkdir -p "$SBX9"
+( cd "$TREE" && HOME="$SBX9" NO_SETUP=1 bash "$TREE/install.sh" ) >/dev/null 2>&1
+stamp="$(cat "$SBX9/.config/cmux-sentinel/VERSION" 2>/dev/null)"
+case "$stamp" in *"version="*) ok "a non-git tree still records its version" ;;
+  *) bad "no version stamp written from a tarball tree: [$stamp]" ;; esac
+if [ -n "$ancestor" ]; then
+  case "$stamp" in *"commit=$ancestor"*) bad "stamped the ancestor repo's sha ($ancestor)" ;;
+    *) ok "does not stamp the enclosing repo's sha" ;; esac
+else
+  ok "does not stamp the enclosing repo's sha (no ancestor repo to borrow)"
+fi
+case "$stamp" in *"commit=unknown"*) ok "says the commit is unknown instead of guessing" ;;
+  *) bad "expected commit=unknown from a tarball tree: [$stamp]" ;; esac
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

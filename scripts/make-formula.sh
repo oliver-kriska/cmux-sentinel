@@ -34,13 +34,29 @@ if [ "$check" = 1 ]; then
     exit 0
   fi
   fver="$(sed -n 's/.*archive\/refs\/tags\/v\([0-9.]*\)\.tar\.gz.*/\1/p' "$OUT" | head -1)"
-  if [ "$fver" != "$ver" ]; then
-    echo "formula is for v$fver but VERSION says $ver" >&2
-    echo "  after tagging v$ver:  scripts/make-formula.sh   (then commit the formula)" >&2
+  grep -q 'sha256 "[0-9a-f]\{64\}"' "$OUT" || { echo "formula has no real sha256" >&2; exit 1; }
+
+  if [ "$fver" = "$ver" ]; then echo "formula: v$fver ✓"; exit 0; fi
+
+  # Numeric per component, so 0.10.0 > 0.9.0 (a string compare gets that wrong).
+  newer="$(printf '%s\n%s\n' "$ver" "$fver" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)"
+  if [ "$newer" = "$fver" ]; then
+    echo "formula is for v$fver but VERSION says $ver — VERSION went backwards" >&2
     exit 1
   fi
-  grep -q 'sha256 "[0-9a-f]\{64\}"' "$OUT" || { echo "formula has no real sha256" >&2; exit 1; }
-  echo "formula: v$fver ✓"
+
+  # The formula describes the LAST RELEASE, so between a version bump and its tag
+  # it is legitimately behind — failing there would block the release commit
+  # itself. The moment the tag exists, regenerating is mandatory: a tap serving
+  # the previous release looks exactly like a successful `brew upgrade`.
+  if git -C "$HERE" rev-parse -q --verify "refs/tags/v$ver" >/dev/null 2>&1; then
+    echo "v$ver is tagged but the formula is still v$fver" >&2
+    echo "  scripts/make-formula.sh   (then commit the formula)" >&2
+    exit 1
+  fi
+  # NB: a shallow CI checkout has no tags, so this arm is where CI lands. The
+  # gate that matters runs locally, where releases are actually cut.
+  echo "formula: v$fver (last release); VERSION $ver is not tagged yet"
   exit 0
 fi
 

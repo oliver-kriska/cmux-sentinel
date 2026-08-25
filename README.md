@@ -96,6 +96,19 @@ Rules:
 The agent follows [`docs/agent-install.md`](docs/agent-install.md) — read it first if you want
 to see exactly what it will run. Prefer to do it by hand? Use the manual steps below.
 
+### Install with Homebrew
+
+```bash
+brew install oliver-kriska/tap/cmux-sentinel
+cmux-sentinel deploy      # puts the files where cmux and launchd expect them
+cmux-sentinel doctor      # confirm the pipeline is wired
+```
+
+`deploy` is not optional, and it is needed after every `brew upgrade` too. Homebrew owns the files
+under its own prefix; the sidebar lives in `~/.config/cmux/sidebars`, the pollers in `~/bin` and
+four launchd agents call them there — so a new formula on its own changes nothing that is running.
+`cmux-sentinel version` prints both numbers and tells you when they've drifted apart.
+
 ### Manual install
 
 One-liner — clones to `~/.cache/cmux-sentinel` and runs the installer:
@@ -253,6 +266,9 @@ reports the installed version, date and commit, and tells you when a newer one i
 from your git checkout.
 
 ```bash
+# Homebrew — two steps, because brew cannot write to $HOME:
+brew upgrade cmux-sentinel && cmux-sentinel deploy
+
 # curl install — the bootstrap git-pulls ~/.cache/cmux-sentinel, then re-installs:
 curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/install.sh | bash
 
