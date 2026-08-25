@@ -218,6 +218,27 @@ of this repo are unaffected. Full setup and every toggle: [`docs/zed-integration
 **Prereqs:** macOS, cmux (custom sidebars / beta), `jq`, `curl`, and `git`. Provider-specific meters
 also require that provider's CLI/account credentials.
 
+## One command: `cmux-sentinel`
+
+The installer drops a small dispatcher at `~/bin/cmux-sentinel` so you don't have to remember nine
+script names:
+
+```bash
+cmux-sentinel setup            # create/repair the sentinel workspaces + re-park them out of ⌘1…⌘9
+cmux-sentinel doctor           # read-only health report for the whole pipeline
+cmux-sentinel version          # what's installed, when, from which commit
+cmux-sentinel usage            # --print every enabled provider (read-only; add --raw etc.)
+cmux-sentinel paint            # --update every enabled provider (writes the meters now)
+cmux-sentinel update           # re-run the installer from the git checkout
+cmux-sentinel group-sync --list
+cmux-sentinel zed              # open Zed on the current worktree (opt-in helper)
+```
+
+It's a dispatcher, not a replacement: every `~/bin/cmux-*.sh` script stays exactly where it is and
+keeps working when called directly — the LaunchAgents reference them by absolute path, so moving
+them would silently stop the meters on every already-bootstrapped install. Arguments and exit
+statuses pass straight through (`cmux-sentinel usage --raw` is `cmux-claude-usage.sh --raw`).
+
 ## Updating
 
 There's no separate updater — **re-run the installer**. It re-deploys every file, backs up what it
@@ -225,8 +246,10 @@ replaces, then **finishes the job**: it re-runs setup (so a release that adds a 
 workspace, and the sentinels are re-parked out of ⌘1…⌘9), repaints every enabled provider, and
 reloads the sidebar. Pass `--no-setup` if you want files only.
 
-Check what you have with `~/bin/cmux-sentinel-doctor.sh` — it reports the installed version and
-tells you when a newer one is published (`CMUX_SENTINEL_UPDATE_CHECK=0` turns the check off).
+Check what you have with `cmux-sentinel version` (or the header of `cmux-sentinel doctor`) — it
+reports the installed version, date and commit, and tells you when a newer one is published
+(`CMUX_SENTINEL_UPDATE_CHECK=0` turns the check off). `cmux-sentinel update` re-runs the installer
+from your git checkout.
 
 ```bash
 # curl install — the bootstrap git-pulls ~/.cache/cmux-sentinel, then re-installs:
@@ -492,6 +515,7 @@ bin/cmux-amp-usage.sh        Amp monthly-allowance poller — `amp usage` parser
 bin/cmux-sentinel-setup.sh   idempotently create the meter sentinel workspaces (+ auto-naming guard)
 bin/cmux-group-sync.sh       workspace-group name → anchor-title sync (opt-in; --list | --raw | --update)
 bin/cmux-sentinel-doctor.sh  read-only, multi-window health-check of the whole pipeline
+bin/cmux-sentinel            one entry point: `cmux-sentinel setup|doctor|version|usage|paint|update|...`
 sidebars/workspaces.swift    the sidebar (the opinionated design + USAGE panels)
 hooks/cmux-bridge.sh         shared ref-counted agent-state bridge
 hooks/amp-bridge.ts          Amp plugin adapter → shared bridge
@@ -507,7 +531,9 @@ tests/group-sync.sh          offline group-sync gating + rename + marker-preserv
 tests/zed-bridge.sh          offline OSC/JSON state bridge tests
 tests/open-in-zed.sh         offline worktree-aware Zed handoff tests
 tests/usage-tui.sh           offline provider/rendering tests for the Zed usage TUI
+tests/entrypoint.sh          offline dispatcher tests (routing, arg + exit-status pass-through)
 examples/                    usage-sentinels.env + launchd templates (Claude + Codex + Amp + group-sync)
+VERSION, CHANGELOG.md        release stamp; install.sh records it under ~/.config/cmux-sentinel/
 install.sh                   file placement + next-steps
 ```
 

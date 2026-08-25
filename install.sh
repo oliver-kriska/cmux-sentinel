@@ -202,6 +202,13 @@ install -m 0755 "$here/bin/cmux-sentinel-doctor.sh" "$HOME/bin/cmux-sentinel-doc
 echo "  -> ~/bin/cmux-sentinel-doctor.sh  (run anytime to health-check the setup)"
 install -m 0755 "$here/bin/cmux-sentinel-setup.sh" "$HOME/bin/cmux-sentinel-setup.sh"
 echo "  -> ~/bin/cmux-sentinel-setup.sh  (creates the meter sentinel workspaces for you)"
+# One entry point for everything above. A DISPATCHER, not a replacement: the
+# cmux-*.sh scripts stay where they are and keep working when called directly,
+# because the LaunchAgents reference them by absolute path and launchd keeps its
+# loaded definition until reloaded. Moving them would stop the meters on every
+# already-bootstrapped install, silently.
+install -m 0755 "$here/bin/cmux-sentinel" "$HOME/bin/cmux-sentinel"
+echo "  -> ~/bin/cmux-sentinel  (one entry point: setup / doctor / usage / update)"
 install -m 0755 "$here/bin/cmux-group-sync.sh" "$HOME/bin/cmux-group-sync.sh"
 echo "  -> ~/bin/cmux-group-sync.sh  (opt-in: show workspace-GROUP names in the sidebar; set GROUP_NAME_SYNC=1)"
 

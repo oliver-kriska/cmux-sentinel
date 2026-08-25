@@ -213,12 +213,13 @@ cmux sidebar validate workspaces && cmux sidebar reload   # synthetic interpreta
 ./bin/cmux-sentinel-setup.sh           # create known-live provider sentinels; fail open when unknown + park them out of ⌘1…⌘9
 ./bin/cmux-group-sync.sh --list        # workspace-GROUP names: which anchors are out of sync (read-only)
 ./bin/cmux-group-sync.sh --update      # rename group anchors to the group name (needs GROUP_NAME_SYNC=1)
+cmux-sentinel doctor                   # dispatcher: setup/doctor/version/usage/paint/update/group-sync/zed
 make sidebar-live                     # mount repo sidebar against live data; human visual verdict
 
 # offline tests (stub cmux/security/curl/$HOME — run in CI too)
 make test   # bridge-state(58) poller-gate(109) codex-poller(83) install-hooks(59) sentinel-setup(69)
             # sentinel-doctor(49) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
-            # amp-bridge(43) amp-poller(49) = 604 assertions total
+            # amp-bridge(43) amp-poller(49) entrypoint(17) = 621 assertions total
 ```
 
 ## Architecture / where things live
@@ -231,6 +232,7 @@ bin/cmux-amp-usage.sh       Amp usage poller (scrapes `amp usage` PROSE — no -
 bin/cmux-sentinel-setup.sh  idempotent sentinel creation (per USAGE_PROVIDERS; known-live buckets only, fail-open on unknown) + auto-naming guard probe + ⌘N shortcut layout (layout/sentinel_window/JQ_NUMBERED, --no-layout).
 bin/cmux-sentinel-doctor.sh READ-ONLY wiring report: cmux/sidebar/bridge/auto-refresh, installed × enabled × live capability × sentinel × freshness per provider, informational Codex limits/reset credits, ⌘N layout drift (JQ_NUMBERED), snapshot data.
                             JQ_NUMBERED is duplicated verbatim in both files — cmux numbers ⌘1…⌘9 over the ORDINARY sidebar rows (group anchors + collapsed members excluded), so change them together.
+bin/cmux-sentinel           DISPATCHER installed as ~/bin/cmux-sentinel: setup|doctor|version|usage|paint|update|group-sync|zed. Resolves the cmux-*.sh helpers next to itself (or ../libexec, or ~/bin) and `exec`s them, so exit status and args pass through untouched. It does NOT replace them — the LaunchAgents reference them by absolute path.
 bin/cmux-sidebar-live-smoke.sh  stage + validate + mount the repo sidebar against live data, wait for a human verdict, then close/clean up; not a pixel assertion.
 bin/cmux-group-sync.sh      workspace-GROUP name → anchor-title sync (opt-in GROUP_NAME_SYNC). split-marker / multi-window / --list|--raw|--update.
 hooks/cmux-bridge.sh        Claude Code → cmux agent-state bridge (⚡ working / ⏳ compacting / ❓ waiting-on-you rows). AGENT-AGNOSTIC: CMUX_SENTINEL_SESSION_PID / _AGENT_LABEL / _LOG_SOURCE let any agent's adapter reuse it.
@@ -238,7 +240,8 @@ hooks/amp-bridge.ts         Amp plugin (Bun/TS) → drives cmux-bridge.sh. Thin 
 hooks/zed-bridge.sh         OPT-IN (ZED_SENTINEL=1) cmux-free Zed bridge: same ⚡/⏳/❓ markers to OSC-2 terminal metadata + JSON sink (stock Zed tab label stays process-derived).
 bin/cmux-open-in-zed.sh     OPT-IN cmux→Zed worktree handoff (`ze` alias / Ctrl-O via --shell-init). git-toplevel-aware; switch/--add/--new/--print.
 bin/zed-usage-tui.sh        OPT-IN usage meters rendered in a Zed terminal pane (reuses the pollers). No cmux writes.
-tests/                      bridge-state + poller-gate + codex-poller + amp-poller + install-hooks + sentinel-setup + sentinel-doctor + group-sync + zed-bridge + open-in-zed + usage-tui + amp-bridge. `make test`.
+tests/                      bridge-state + poller-gate + codex-poller + amp-poller + install-hooks + sentinel-setup + sentinel-doctor + group-sync + zed-bridge + open-in-zed + usage-tui + amp-bridge + entrypoint. `make test`.
+VERSION + CHANGELOG.md      release stamp. install.sh copies VERSION (+ install date + short commit) to ~/.config/cmux-sentinel/VERSION; `cmux-sentinel version` and the doctor header read it back and compare against the remote VERSION (fail-silent; CMUX_SENTINEL_UPDATE_CHECK=0 disables).
 examples/                   usage-sentinels.env + launchd plist templates (com.cmux-claude-usage / com.cmux-codex-usage / com.cmux-amp-usage / com.cmux-group-sync).
 ```
 

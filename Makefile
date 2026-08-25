@@ -10,14 +10,14 @@
 #   make help    list targets
 
 SHELL   := bash
-SCRIPTS := bin/cmux-claude-usage.sh bin/cmux-codex-usage.sh bin/cmux-amp-usage.sh bin/cmux-sentinel-doctor.sh \
+SCRIPTS := bin/cmux-sentinel bin/cmux-claude-usage.sh bin/cmux-codex-usage.sh bin/cmux-amp-usage.sh bin/cmux-sentinel-doctor.sh \
            bin/cmux-sentinel-setup.sh bin/cmux-sidebar-live-smoke.sh bin/cmux-group-sync.sh hooks/cmux-bridge.sh \
            install.sh scripts/check-secrets.sh \
            hooks/zed-bridge.sh bin/cmux-open-in-zed.sh bin/zed-usage-tui.sh \
            tests/bridge-state.sh tests/poller-gate.sh tests/codex-poller.sh \
            tests/install-hooks.sh tests/sentinel-setup.sh tests/sentinel-doctor.sh tests/group-sync.sh \
            tests/zed-bridge.sh tests/open-in-zed.sh tests/usage-tui.sh \
-           tests/amp-bridge.sh tests/amp-poller.sh
+           tests/amp-bridge.sh tests/amp-poller.sh tests/entrypoint.sh
 MD      := $(wildcard *.md) $(wildcard docs/*.md)
 
 .PHONY: help check ci lint shellcheck secrets markdown test doctor sidebar sidebar-live fmt fmt-check
@@ -77,6 +77,7 @@ test:
 	bash tests/usage-tui.sh
 	bash tests/amp-bridge.sh
 	bash tests/amp-poller.sh
+	bash tests/entrypoint.sh
 
 # health-check the live setup (read-only) — bridge/hooks/launchd/automation/sentinels.
 doctor:

@@ -1,0 +1,111 @@
+#!/bin/bash
+# cmux-sentinel — one entry point for the whole toolkit.
+#
+# This is a DISPATCHER, not a rewrite. The nine cmux-*.sh scripts stay exactly
+# where they are and keep working when called directly, because four LaunchAgents
+# reference them by absolute path (~/bin/cmux-claude-usage.sh) and launchd holds
+# its loaded definition until explicitly reloaded. Moving them would silently stop
+# the meters on every already-bootstrapped install — the symptom being nothing at
+# all, which is the failure mode this project keeps having to design against.
+#
+# Lookup order lets the same file work from a git checkout, a normal install, and
+# a Homebrew prefix without edits:
+#   1. beside this script      (repo checkout, or ~/bin after install)
+#   2. ../libexec/cmux-sentinel (Homebrew: bin/ shim + libexec/ payload)
+#   3. ~/bin                    (dispatcher elsewhere on PATH)
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CANDIDATES=("$HERE" "$HERE/../libexec/cmux-sentinel" "$HOME/bin")
+REPO_URL="https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/install.sh"
+
+die() { echo "cmux-sentinel: $*" >&2; exit 1; }
+
+# Find a helper script by name, or fail with the paths actually searched — a
+# "command not found" that doesn't say where it looked is a support ticket.
+resolve() { # $1 = script filename
+  local d
+  for d in "${CANDIDATES[@]}"; do
+    [ -x "$d/$1" ] && { printf '%s' "$d/$1"; return 0; }
+  done
+  die "can't find $1 (looked in: ${CANDIDATES[*]}). Re-run the installer."
+}
+
+run() { local s; s="$(resolve "$1")" || exit 1; shift; exec "$s" "$@"; }
+
+usage_all() {
+  # Each poller self-gates and exits 0 silently when its provider is disabled or
+  # not installed, so asking all three is safe and needs no config parsing here.
+  local p s out shown=0
+  for p in claude codex amp; do
+    s="$(resolve "cmux-$p-usage.sh" 2>/dev/null)" || continue
+    # A poller that is gated off, offline or unauthenticated prints nothing here
+    # and says why on stderr; that is its contract, so its exit status is not an
+    # error for `usage` as a whole.
+    out="$("$s" --print 2>/dev/null)" || true
+    [ -n "$out" ] || continue
+    shown=1
+    printf '%s\n' "$out"
+  done
+  [ "$shown" = 1 ] || echo "no usage data — is any provider enabled in ~/.config/cmux/usage-sentinels.env?" >&2
+  return 0
+}
+
+show_version() {
+  local f="$HOME/.config/cmux-sentinel/VERSION"
+  if [ -f "$f" ]; then
+    sed -n 's/^version=/cmux-sentinel /p;s/^installed=/  installed /p;s/^commit=/  commit    /p' "$f"
+  else
+    echo "cmux-sentinel (no version stamp — installed before v0.2.0, or copied by hand)"
+    echo "  re-run the installer to record one:  cmux-sentinel update"
+  fi
+}
+
+help_text() {
+  cat <<'HELP'
+cmux-sentinel — cmux sidebar with agent-state rows and AI usage meters
+
+  cmux-sentinel setup           create/refresh the meter sentinels, park them out of ⌘1…⌘9
+  cmux-sentinel doctor          health-check the whole pipeline (read-only)
+  cmux-sentinel usage           print every enabled provider's usage
+  cmux-sentinel paint           refresh the meters now (what launchd does every 5 min)
+  cmux-sentinel update          fetch the latest release and re-install it
+  cmux-sentinel version         what you have installed
+  cmux-sentinel group-sync      sync workspace-GROUP names onto their anchor rows
+  cmux-sentinel zed             open the current worktree in Zed (opt-in integration)
+
+Anything after the command is passed through, so `cmux-sentinel usage --raw` and
+`cmux-sentinel setup --no-layout` work. The underlying cmux-*.sh scripts are still
+installed and still callable directly; launchd calls them by path.
+HELP
+}
+
+cmd="${1:-help}"; [ $# -gt 0 ] && shift
+case "$cmd" in
+  setup)       run cmux-sentinel-setup.sh "$@" ;;
+  doctor)      run cmux-sentinel-doctor.sh "$@" ;;
+  version|--version|-V) show_version ;;
+  usage)       usage_all "$@" ;;
+  paint)
+    # Same order the installer uses. Each poller self-gates, so a disabled or
+    # uninstalled provider is a silent no-op rather than an error.
+    for p in claude codex amp; do
+      s="$(resolve "cmux-$p-usage.sh" 2>/dev/null)" || continue
+      "$s" --update 2>/dev/null || true
+    done
+    command -v cmux >/dev/null 2>&1 && cmux sidebar reload >/dev/null 2>&1 \
+      && echo "meters repainted, sidebar reloaded" \
+      || echo "meters repainted (couldn't reach cmux to reload the sidebar)"
+    ;;
+  update)
+    # The installer's own bootstrap git-pulls the cache and re-execs, so this is
+    # the documented update path rather than a second implementation of it.
+    command -v curl >/dev/null 2>&1 || die "curl is required to update"
+    echo "Fetching the latest cmux-sentinel…"
+    curl -fsSL "$REPO_URL" | bash -s -- "$@"
+    ;;
+  group-sync)  run cmux-group-sync.sh "$@" ;;
+  zed)         run cmux-open-in-zed.sh "$@" ;;
+  help|--help|-h) help_text ;;
+  *)           echo "cmux-sentinel: unknown command '$cmd'" >&2; echo >&2; help_text >&2; exit 2 ;;
+esac

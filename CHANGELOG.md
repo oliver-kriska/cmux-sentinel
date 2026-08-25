@@ -21,6 +21,13 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
 - **Extra-usage spend meter (`spend`).** Meters money against your overage budget. The row is
   hidden while the balance is zero and appears by itself on the first charge, so it costs nothing
   to carry and needs no opt-in switch. Skipped entirely if your account has no such budget.
+- **One command: `cmux-sentinel`.** A single entry point at `~/bin/cmux-sentinel` —
+  `setup`, `doctor`, `version`, `usage`, `paint`, `update`, `group-sync`, `zed` — instead of nine
+  script names. It dispatches to the existing `cmux-*.sh` scripts, which stay exactly where they
+  are and keep working when called directly (the LaunchAgents reference them by absolute path).
+- **`cmux-sentinel version` and a version stamp.** The installer records the version, install date
+  and commit under `~/.config/cmux-sentinel/VERSION`; the doctor header prints it and tells you
+  when a newer release is published (`CMUX_SENTINEL_UPDATE_CHECK=0` turns the check off).
 - **Alert when an agent needs you.** Set `CMUX_SENTINEL_NOTIFY_CMD` to run a command on the ❓
   transition — the one state worth interrupting you for. Nothing else is notifiable by design.
 
