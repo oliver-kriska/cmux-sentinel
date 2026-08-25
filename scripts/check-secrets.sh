@@ -87,6 +87,22 @@ if [ -f sidebars/workspaces.swift ] \
   flag "sidebar is missing its isAmpMeter title anchors (w.title.hasPrefix)" "sidebars/workspaces.swift"
 fi
 
+# Every meter label must also have a DISPLAY NAME. Adding a label to a predicate
+# but not to meterWindow() renders an anonymous "usage" row — which looks
+# deliberate rather than broken, so it ships. It did: the per-model row went out
+# reading "usage" instead of "model". Each label appears once in its predicate and
+# once in meterWindow, so a count below 2 means the name is missing.
+if [ -f sidebars/workspaces.swift ]; then
+  labels="$(grep -o 'hasPrefix("[^ "]* ")' sidebars/workspaces.swift \
+            | sed 's/hasPrefix("//; s/ ")//' | sort -u)"
+  for lbl in $labels; do
+    n="$(grep -c "hasPrefix(\"$lbl \")" sidebars/workspaces.swift)"
+    [ "$n" -ge 2 ] && continue
+    flag "meter label '$lbl' has no name in meterWindow() — it renders a generic \"usage\" row" \
+         "sidebars/workspaces.swift"
+  done
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo >&2
   echo "secrets check failed — see above. Nothing was committed." >&2

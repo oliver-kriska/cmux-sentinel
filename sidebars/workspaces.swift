@@ -256,6 +256,18 @@ func meterWindow(_ w) -> String {   // human label; title anchor remains unchang
   if w.title.hasPrefix("ampu ") { return "threads" }
   if w.title == "ampo" { return "orbs" }
   if w.title.hasPrefix("ampo ") { return "orbs" }
+  // Per-MODEL weekly cap. The left column says what KIND of window it is; the
+  // model's own name ("Fable") rides the detail text, because Anthropic re-scopes
+  // which model is capped and nothing here may hardcode it.
+  if w.title == "m7d" { return "model" }
+  if w.title.hasPrefix("m7d ") { return "model" }
+  // Extra-usage spend. Only ever drawn when there IS spend — a zero balance is
+  // filtered out upstream by isZeroSpend — so this never labels an empty row.
+  if w.title == "spend" { return "credits" }
+  if w.title.hasPrefix("spend ") { return "credits" }
+  // Every meter above is named. Reaching this means a NEW label was added to a
+  // meter predicate without a name here, which renders an anonymous "usage" row —
+  // that is exactly the bug this line is meant to make obvious rather than hide.
   return "usage"
 }
 func meterTint(_ w) -> String {     // color-from-data: red ≥90%, amber ≥70%, else blue
