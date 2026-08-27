@@ -216,10 +216,10 @@ cmux sidebar validate workspaces && cmux sidebar reload   # synthetic interpreta
 cmux-sentinel doctor                   # dispatcher: setup/doctor/version/usage/paint/update/group-sync/zed
 make sidebar-live                     # mount repo sidebar against live data; human visual verdict
 
-# offline tests (stub cmux/security/curl/$HOME — run in CI too)
-make test   # bridge-state(58) poller-gate(109) codex-poller(83) install-hooks(62) sentinel-setup(69)
+# offline tests (stub cmux/security/curl/stat/$HOME — run in CI too)
+make test   # bridge-state(58) poller-gate(111) codex-poller(83) install-hooks(62) sentinel-setup(69)
             # sentinel-doctor(49) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
-            # amp-bridge(43) amp-poller(49) entrypoint(33) formula(18) = 658 assertions total
+            # amp-bridge(43) amp-poller(49) entrypoint(33) formula(18) = 660 assertions total
 ```
 
 ## Architecture / where things live
@@ -432,6 +432,18 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
   `⚠ rate limit`/`⚠ auth` and the next poll must retry the network, never replay the error.
   `TTL=0` disables it. Cache file is `$USAGE_STATE_DIR/<provider>.last-response.json`, mode 600
   (it is an account-scoped usage body — treat it like `--raw-full`).
+  **Probe the mtime with GNU `stat -c` FIRST, then BSD `stat -f` — the order is load-bearing and
+  getting it backwards is invisible on macOS.** The two flavours are NOT symmetric: BSD rejects
+  `-c` outright (empty stdout, clean fallback), but on Linux `-f` is a REAL flag meaning
+  `--file-system`, so a BSD-first probe prints a filesystem block, the `||` appends the true mtime
+  to it, and the digit check rejects the concatenation — the cache reads cold forever and every
+  burst is two API calls again. Shipped exactly that way: `make ci` was red for ten commits on
+  `main` while every local run passed 109/109, because the only failing assertion was one nobody
+  could reproduce on a Mac. `hooks/cmux-bridge.sh` already had the right order; the poller didn't.
+  Both flavours are now pinned on ANY platform by a `stat` stub in `tests/poller-gate.sh`
+  (`STUB_STAT=gnu|bsd`, unset delegates to the real binary) — reach for that stub before trusting
+  a green local run on anything mtime-shaped. Same lesson as the empty-read traps above: a suite
+  that passes on your OS is not evidence about the other one.
 - **A provider may not HAVE a window we model — and a dead meter is NOT free.** A sentinel is
   an ordinary workspace, so a permanently-`n/a` row still eats one of the ⌘1…⌘9 keys to show
   nothing. OpenAI dropped the **5h window for Codex Pro** — confirmed permanent 2026-07-16

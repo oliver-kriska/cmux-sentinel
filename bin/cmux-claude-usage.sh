@@ -250,11 +250,16 @@ FETCH_OK=0; FETCH_AUTH=2; FETCH_RATE=3; FETCH_SERVER=4; FETCH_NET=5; FETCH_HTTP=
 CACHE_TTL="${CMUX_SENTINEL_USAGE_CACHE_TTL:-60}"   # 0 disables
 CACHE_FILE="$USAGE_STATE_DIR/$PROVIDER_ID.last-response.json"
 
+# GNU `stat -c` is probed FIRST, then BSD `stat -f` — the order is load-bearing.
+# On Linux `-f` means --file-system, so a BSD-first probe prints a filesystem block
+# (and fails on the `%m` operand), the `||` then appends the real mtime to it, and
+# the digit check below rejects the concatenation: the cache reads cold forever.
+# BSD stat rejects `-c` outright with an empty stdout, so GNU-first is safe on both.
 _cache_read() {
   [ "${CACHE_TTL:-0}" -gt 0 ] 2>/dev/null || return 1
   [ -f "$CACHE_FILE" ] || return 1
   local mtime now
-  mtime=$(stat -f %m "$CACHE_FILE" 2>/dev/null || stat -c %Y "$CACHE_FILE" 2>/dev/null) || return 1
+  mtime=$(stat -c %Y "$CACHE_FILE" 2>/dev/null) || mtime=$(stat -f %m "$CACHE_FILE" 2>/dev/null) || return 1
   now=$(date +%s)
   case "$mtime" in ''|*[!0-9]*) return 1 ;; esac
   [ "$(( now - mtime ))" -lt "$CACHE_TTL" ] || return 1
