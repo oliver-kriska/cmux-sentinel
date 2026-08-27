@@ -108,6 +108,27 @@ exit 0
 FAKE
 chmod +x "$ROOT/bin/curl"
 
+# Fake stat: makes the cache's mtime probe reproducible on the OTHER platform.
+# STUB_STAT=gnu|bsd impersonates that flavour's flag handling; unset delegates to
+# the real one, so every other test is untouched. The asymmetry is the whole point
+# and it is invisible on a single OS: BSD REJECTS `-c` outright (a clean fallback),
+# but GNU's `-f` is a valid flag (--file-system) that prints a filesystem block
+# instead of failing, so a BSD-first probe reads garbage on Linux only.
+cat > "$ROOT/bin/stat" <<'FAKE'
+#!/bin/bash
+case "${STUB_STAT:-}" in
+  gnu)  # -c <fmt> is the mtime; -f is --file-system and errors on the format operand
+        [ "$1" = "-c" ] && { date +%s; exit 0; }
+        printf '  File: "/"\n    ID: 0 Namelen: 255 Type: ext2/ext3\n'; exit 1 ;;
+  bsd)  # -f <fmt> is the mtime; anything else is an illegal option, stdout empty
+        [ "$1" = "-f" ] && { date +%s; exit 0; }
+        echo "stat: illegal option -- ${1#-}" >&2; exit 1 ;;
+esac
+REAL=/usr/bin/stat; [ -x "$REAL" ] || REAL=/bin/stat
+exec "$REAL" "$@"
+FAKE
+chmod +x "$ROOT/bin/stat"
+
 export POLLERTEST="$ROOT" HOME="$ROOT/home" TMPDIR="$ROOT"
 PATH="$ROOT/bin:$PATH"
 CREDS="$ROOT/home/.claude/.credentials.json"
@@ -260,6 +281,20 @@ calls=$(wc -l < "$CURLCALLS" 2>/dev/null | tr -d ' ')
 if [ "$calls" = "1" ]; then pass=$((pass + 1)); printf '  ✓ two invocations, one API call\n'
 else fail=$((fail + 1)); printf '  ✗ two invocations made %s API calls (want 1)\n' "$calls"; fi
 ckhas "the cached body still paints" "5h |7%"
+
+# The mtime probe is the cache's one portability contract, and getting it backwards
+# is INVISIBLE on whichever OS you develop on: probing BSD-first still works on
+# macOS, while on Linux GNU's `-f` (--file-system) prints a block the digit check
+# then rejects, so the cache reads cold forever and every burst is two API calls.
+# That shipped — CI was red for ten commits while every local run passed. Pin BOTH.
+for flavor in gnu bsd; do
+  reset
+  STUB_STAT="$flavor" STUB_CURL="ok" CMUX_SENTINEL_USAGE_CACHE_TTL=600 bash "$POLLER" --print >/dev/null
+  STUB_STAT="$flavor" STUB_CURL="ok" CMUX_SENTINEL_USAGE_CACHE_TTL=600 bash "$POLLER" --update >/dev/null
+  calls=$(wc -l < "$CURLCALLS" 2>/dev/null | tr -d ' ')
+  if [ "$calls" = "1" ]; then pass=$((pass + 1)); printf '  ✓ %s stat: the burst still collapses to one call\n' "$flavor"
+  else fail=$((fail + 1)); printf '  ✗ %s stat: two invocations made %s API calls (want 1)\n' "$flavor" "$calls"; fi
+done
 
 reset
 STUB_CURL="ok" CMUX_SENTINEL_USAGE_CACHE_TTL=0 bash "$POLLER" --print >/dev/null
