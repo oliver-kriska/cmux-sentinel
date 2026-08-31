@@ -169,12 +169,17 @@ echo "L: ❓ notifier — opt-in, once per transition, and never able to break a
 # for the recorder file rather than assuming the child already ran.
 NOTED="$ROOT/.notified"
 notewait() { # $1 = expected line count; returns as soon as it is reached
+  # 20s, not 5. _notify DETACHES and discards output on purpose (it runs on the
+  # agent's hot path), so the test has no handle on the child and no way to make it
+  # faster — waiting longer is the only correct move. 5s was enough on an idle Mac
+  # and lost twice under `make ci` load, blocking a push both times; the wait costs
+  # nothing when it passes, because it returns the moment the file appears.
   local i=0
-  while [ "$i" -lt 50 ]; do
+  while [ "$i" -lt 100 ]; do
     # `<` on a missing file fails in the SHELL, before wc runs, so 2>/dev/null on
     # wc can't silence it — test existence first.
     [ -f "$NOTED" ] && [ "$(wc -l < "$NOTED")" -ge "$1" ] && return 0
-    i=$((i + 1)); sleep 0.1
+    i=$((i + 1)); sleep 0.2
   done
   return 1
 }
