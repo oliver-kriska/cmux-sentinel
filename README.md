@@ -319,6 +319,19 @@ not a sidebar edit, and gives three robustness guarantees:
   fetch is classified rather than guessed at, so the row says `⚠ auth` (401), `⚠ rate limit` (429),
   `⚠ api down` (5xx) or `⚠ offline` (unreachable), and `~/bin/cmux-sentinel-doctor.sh` replays the
   poller's own last error out of its launchd log.
+- **A failed fetch no longer wipes the meters — for a while.** The windows being metered move over
+  hours and days, so numbers that are minutes old are still worth reading. For
+  `CMUX_SENTINEL_STALE_GRACE` seconds (default 1800) after a fetch fails, each row keeps its last
+  good value and **swaps the reset countdown for the data's age** — `4% · 12m old` — so a stale
+  number can never pass for a live one. Past that window the rows fall back to the `⚠` marker, and
+  the poller exits non-zero and records no freshness the whole time, so the doctor still calls it
+  stale while the panel is still useful. Set it to `0` for the old wipe-on-failure behaviour.
+- **A 429 backs off; nothing else does.** A rate limit is the one failure where asking again on
+  schedule is what keeps you throttled, so after a 429 the poller stops calling the endpoint for
+  10, then 20, then 40 minutes (`CMUX_SENTINEL_BACKOFF_BASE`, capped by `CMUX_SENTINEL_BACKOFF_MAX`,
+  `0` disables) and clears that the moment a fetch succeeds. An expired token or a dropped network
+  costs the endpoint nothing to retry and recovers the instant you fix it, so those keep the normal
+  cadence.
 - **You can disable a provider you *do* have installed.** Set `USAGE_PROVIDERS` in
   `~/.config/cmux/usage-sentinels.env` (space-separated; default `claude`). Drop a name to make that
   poller a no-op without unloading launchd; then `cmux workspace close` its sentinels to remove the

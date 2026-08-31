@@ -136,6 +136,7 @@ RENAMES="$ROOT/.renames"
 PROGRESS="$ROOT/.progress"
 STAMP="$ROOT/home/.local/state/cmux-sentinel/usage/claude.last-success"
 CACHE="$ROOT/home/.local/state/cmux-sentinel/usage/claude.last-response.json"
+BACKOFF="$ROOT/home/.local/state/cmux-sentinel/usage/claude.backoff"
 CURLCALLS="$ROOT/.curlcalls"
 TOKEN_JSON='{"claudeAiOauth":{"accessToken":"faketoken"}}'
 
@@ -158,9 +159,9 @@ cknostamp() { if [ ! -e "$STAMP" ]; then pass=$((pass + 1)); printf '  ✓ %s\n'
               else fail=$((fail + 1)); printf '  ✗ %s — unexpected success stamp\n' "$1"; fi; }
 # Drop the response cache too: each test feeds curl a DIFFERENT payload, so a body
 # cached by the previous test would be served instead and quietly assert nothing.
-reset()  { rm -f "$RENAMES" "$PROGRESS" "$STAMP" "$CACHE" "$CURLCALLS"; }
+reset()  { rm -f "$RENAMES" "$PROGRESS" "$STAMP" "$CACHE" "$CURLCALLS" "$BACKOFF"; }
 # Same, but KEEPS a warm cache — for asserting what a cached body does next.
-reset_warm() { rm -f "$RENAMES" "$PROGRESS" "$STAMP" "$CURLCALLS"; }
+reset_warm() { rm -f "$RENAMES" "$PROGRESS" "$STAMP" "$CURLCALLS" "$BACKOFF"; }
 OUT=""
 ckout()    { if printf '%s' "$OUT" | grep -q -- "$2"; then pass=$((pass + 1)); printf '  ✓ %s\n' "$1"
              else fail=$((fail + 1)); printf '  ✗ %s — [%s] not in stdout:\n%s\n' "$1" "$2" "$OUT"; fi; }
@@ -312,7 +313,7 @@ STUB_CURL="ok" STUB_HTTP=429 CMUX_SENTINEL_USAGE_CACHE_TTL=600 bash "$POLLER" --
 ckcode "a cold-cache 429 fails" "$?" 1
 ckhas "429 surfaces as ⚠ rate limit" "⚠ rate limit"
 reset_warm   # keep whatever the failed run left behind
-STUB_CURL="ok" STUB_HTTP=429 CMUX_SENTINEL_USAGE_CACHE_TTL=600 bash "$POLLER" --update >/dev/null 2>&1
+STUB_CURL="ok" STUB_HTTP=429 CMUX_SENTINEL_USAGE_CACHE_TTL=600 CMUX_SENTINEL_BACKOFF_BASE=0 bash "$POLLER" --update >/dev/null 2>&1
 ckcode "the next poll fails again — the error was not cached" "$?" 1
 calls=$(wc -l < "$CURLCALLS" 2>/dev/null | tr -d ' ')
 if [ "$calls" = "1" ]; then pass=$((pass + 1)); printf '  ✓ a failed response is never served from cache\n'
@@ -448,6 +449,73 @@ STUB_CURL="ok" STUB_SPEND=1260 bash "$POLLER" --update >/dev/null 2>&1
 ckcode "a missing spend sentinel reports failure" "$?" 1
 ckhas "…but 5h still painted" "5h |7%"
 ckhas "…and 7d still painted" "7d |42%"
+
+echo "T13: a throttled poll keeps the meters, and stops hammering the endpoint"
+# Reported from a second install: every Claude row sat on "⚠ rate limit" while
+# Claude Code's own /usage showed real numbers. One 429 wiped three meters whose
+# data was five minutes old, on windows that move over hours and days — and the
+# next poll asked again on the same cadence that earned the 429.
+reset
+STUB_CURL="ok" bash "$POLLER" --update >/dev/null 2>&1     # a good body to fall back on
+rm -f "$RENAMES" "$PROGRESS" "$STAMP" "$CURLCALLS"
+STUB_CURL="ok" STUB_HTTP=429 CMUX_SENTINEL_USAGE_CACHE_TTL=0 bash "$POLLER" --update >/dev/null 2>&1
+ckcode "a throttled poll still fails" "$?" 1
+ckhas "the row keeps its number" "5h |7%"
+ckhas "…and says how old it is" "old"
+ckhas "the stale detail stays one | segment (the sidebar splits on it)" "5h |7% ·"
+cknothas "no ⚠ marker while inside the grace window" "⚠ rate limit"
+ckprog "the native bar is kept, not cleared" "PROG 0.07"
+ckprognothas "a grace paint never clears progress" "CLEAR"
+cknostamp "a grace paint is not fresh data"
+
+# Backoff: the SECOND consecutive 429 must not reach the network at all. This is
+# the half that lets a throttle clear instead of being renewed every 5 minutes.
+rm -f "$CURLCALLS"
+STUB_CURL="ok" STUB_HTTP=429 CMUX_SENTINEL_USAGE_CACHE_TTL=0 bash "$POLLER" --update >/dev/null 2>&1
+calls=0; [ -f "$CURLCALLS" ] && calls=$(wc -l < "$CURLCALLS" | tr -d ' ')
+if [ "${calls:-0}" = "0" ]; then pass=$((pass + 1)); printf '  ✓ a backed-off poll makes no API call\n'
+else fail=$((fail + 1)); printf '  ✗ a backed-off poll still called the endpoint %s time(s)\n' "$calls"; fi
+ckhas "…and still repaints the aged row" "5h |7%"
+
+# An EXPIRED backoff window resumes fetching, and a success clears the state.
+printf '1 3\n' > "$BACKOFF"          # deadline in 1970 = window already over
+rm -f "$CURLCALLS" "$RENAMES"
+STUB_CURL="ok" CMUX_SENTINEL_USAGE_CACHE_TTL=0 bash "$POLLER" --update >/dev/null 2>&1
+ckcode "an expired backoff window fetches again" "$?" 0
+ckhas "a recovered poll paints live numbers again" "5h |7% ("
+if [ ! -f "$BACKOFF" ]; then pass=$((pass + 1)); printf '  ✓ a success clears the backoff state\n'
+else fail=$((fail + 1)); printf '  ✗ backoff state survived a successful poll\n'; fi
+
+# Only 429 backs off. A 401 or a dead network costs the endpoint nothing to retry
+# and recovers the moment the user fixes it — deferring those keeps a meter dark
+# for no reason.
+reset
+STUB_CURL="ok" STUB_HTTP=401 bash "$POLLER" --update >/dev/null 2>&1
+if [ ! -f "$BACKOFF" ]; then pass=$((pass + 1)); printf '  ✓ an auth failure does not arm backoff\n'
+else fail=$((fail + 1)); printf '  ✗ 401 armed the 429 backoff\n'; fi
+reset
+STUB_CURL="fail" bash "$POLLER" --update >/dev/null 2>&1
+if [ ! -f "$BACKOFF" ]; then pass=$((pass + 1)); printf '  ✓ a transport failure does not arm backoff\n'
+else fail=$((fail + 1)); printf '  ✗ a transport failure armed the 429 backoff\n'; fi
+
+# The grace window is BOUNDED: past it the row must go back to the honest marker,
+# so a genuinely dead pipeline still turns the panel off. That bound is the whole
+# reason this is not "serve stale numbers forever".
+reset
+STUB_CURL="ok" bash "$POLLER" --update >/dev/null 2>&1
+rm -f "$RENAMES" "$PROGRESS" "$CURLCALLS" "$BACKOFF"
+touch -t 202601010000 "$CACHE"       # older than any sane grace window
+STUB_CURL="ok" STUB_HTTP=429 CMUX_SENTINEL_USAGE_CACHE_TTL=0 bash "$POLLER" --update >/dev/null 2>&1
+ckhas "past the grace window the row falls back to ⚠" "⚠ rate limit"
+ckprog "…and the stale bar is cleared" "CLEAR"
+
+# The off switch restores the pre-grace behaviour exactly.
+reset
+STUB_CURL="ok" bash "$POLLER" --update >/dev/null 2>&1
+rm -f "$RENAMES" "$PROGRESS" "$CURLCALLS" "$BACKOFF"
+STUB_CURL="ok" STUB_HTTP=429 CMUX_SENTINEL_STALE_GRACE=0 CMUX_SENTINEL_USAGE_CACHE_TTL=0 bash "$POLLER" --update >/dev/null 2>&1
+ckhas "STALE_GRACE=0 marks ⚠ immediately" "⚠ rate limit"
+cknothas "STALE_GRACE=0 keeps no number" "5h |7%"
 
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

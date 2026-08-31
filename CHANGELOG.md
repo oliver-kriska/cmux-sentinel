@@ -9,6 +9,25 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
 
 `~/bin/cmux-sentinel-doctor.sh` reports the version you actually have.
 
+## Unreleased
+
+### Fixed
+
+- **One rate-limited request no longer blanks the Claude meters.** Every row went to
+  `⚠ rate limit` — losing the number *and* the bar — while Claude Code's own `/usage` still showed
+  real values. For 30 minutes after a failed fetch each row now keeps its last good value and shows
+  the data's age in place of the reset countdown (`4% · 12m old`), so a stale number can't pass for
+  a live one; past that it falls back to the `⚠` marker as before. The poller still exits non-zero
+  and records no freshness throughout, so `cmux-sentinel doctor` keeps telling the truth.
+  `CMUX_SENTINEL_STALE_GRACE=0` restores the old behaviour.
+- **A 429 now backs off instead of asking again on the same cadence that caused it.** 10, then 20,
+  then 40 minutes, cleared by the first success (`CMUX_SENTINEL_BACKOFF_BASE`/`_MAX`). Expired
+  tokens and network errors are deliberately *not* backed off — they cost the endpoint nothing to
+  retry and recover the moment you fix them.
+- **The response cache read cold on Linux,** so CI failed one assertion for ten commits. The mtime
+  probe tried BSD `stat -f` before GNU `stat -c`, and on Linux `-f` means `--file-system`. macOS was
+  never affected.
+
 ## 0.2.1 — 2026-08-25
 
 ### Added

@@ -245,29 +245,68 @@ FETCH_OK=0; FETCH_AUTH=2; FETCH_RATE=3; FETCH_SERVER=4; FETCH_NET=5; FETCH_HTTP=
 # doing exactly print-then-update). launchd's own 300s interval is far outside this
 # TTL, so the daemon is unaffected — this only collapses human bursts.
 #
-# Cached is the RAW body of a validated 200. Failures are never cached: a 429 must
-# stay visible as ⚠ rate limit rather than being papered over with stale numbers.
-CACHE_TTL="${CMUX_SENTINEL_USAGE_CACHE_TTL:-60}"   # 0 disables
+# Cached is the RAW body of a validated 200. Failures are never cached — the next
+# poll always retries the network rather than replaying an error. (What a row
+# DISPLAYS while a fetch is failing is a separate question, answered by the grace
+# window below, which reads these same bytes and labels their age.)
+CACHE_TTL="${CMUX_SENTINEL_USAGE_CACHE_TTL:-60}"   # 0 disables burst suppression
 CACHE_FILE="$USAGE_STATE_DIR/$PROVIDER_ID.last-response.json"
+
+# How long a last-good response may keep PAINTING after a fetch fails, before the
+# rows fall back to the bare "⚠ <reason>" marker. The rule this softens is real —
+# never quietly serve stale numbers as if they were live — so the grace paint is
+# never quiet: it drops the reset countdown and shows the data's AGE in its place,
+# and it still exits non-zero and still refuses to stamp freshness. What it buys is
+# that one throttled request no longer wipes three meters whose numbers were five
+# minutes old, on windows that move over hours and days. 0 = old behaviour.
+STALE_GRACE="${CMUX_SENTINEL_STALE_GRACE:-1800}"
+STALE_AGE=""        # set only on a grace paint; drives meter_detail() + the exit
+STALE_WHY=""
+BACKOFF_FILE="$USAGE_STATE_DIR/$PROVIDER_ID.backoff"
+BACKOFF_BASE="${CMUX_SENTINEL_BACKOFF_BASE:-600}"
+BACKOFF_MAX="${CMUX_SENTINEL_BACKOFF_MAX:-3600}"
 
 # GNU `stat -c` is probed FIRST, then BSD `stat -f` — the order is load-bearing.
 # On Linux `-f` means --file-system, so a BSD-first probe prints a filesystem block
 # (and fails on the `%m` operand), the `||` then appends the real mtime to it, and
 # the digit check below rejects the concatenation: the cache reads cold forever.
 # BSD stat rejects `-c` outright with an empty stdout, so GNU-first is safe on both.
-_cache_read() {
-  [ "${CACHE_TTL:-0}" -gt 0 ] 2>/dev/null || return 1
+# Age of the stored last-good response in seconds; empty if there isn't one.
+_cache_age() {
   [ -f "$CACHE_FILE" ] || return 1
   local mtime now
   mtime=$(stat -c %Y "$CACHE_FILE" 2>/dev/null) || mtime=$(stat -f %m "$CACHE_FILE" 2>/dev/null) || return 1
-  now=$(date +%s)
   case "$mtime" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$(( now - mtime ))" -lt "$CACHE_TTL" ] || return 1
+  now=$(date +%s)
+  local age=$(( now - mtime ))
+  # A clock that moved backwards would otherwise read as a negative age, which
+  # passes every "younger than" test below and serves a body of unknown vintage.
+  [ "$age" -lt 0 ] && age=0
+  printf '%s' "$age"
+}
+
+_cache_read() {
+  [ "${CACHE_TTL:-0}" -gt 0 ] 2>/dev/null || return 1
+  local age; age=$(_cache_age) || return 1
+  [ "$age" -lt "$CACHE_TTL" ] || return 1
+  cat "$CACHE_FILE" 2>/dev/null
+}
+
+# The GRACE read: the same stored body, but judged against the much longer grace
+# window instead of the burst TTL. Only --update uses it, and only after a fetch
+# has already failed — a human running --print still gets the error immediately.
+_stale_read() {
+  [ "${STALE_GRACE:-0}" -gt 0 ] 2>/dev/null || return 1
+  local age; age=$(_cache_age) || return 1
+  [ "$age" -le "$STALE_GRACE" ] || return 1
   cat "$CACHE_FILE" 2>/dev/null
 }
 
 _cache_write() {
-  [ "${CACHE_TTL:-0}" -gt 0 ] 2>/dev/null || return 0
+  # Stored whenever EITHER feature could want it: the burst cache reads it inside
+  # CACHE_TTL, the grace paint reads the same bytes for far longer. Gating this on
+  # CACHE_TTL alone would mean TTL=0 silently disabled the grace window too.
+  { [ "${CACHE_TTL:-0}" -gt 0 ] || [ "${STALE_GRACE:-0}" -gt 0 ]; } 2>/dev/null || return 0
   local tmp
   mkdir -p "$USAGE_STATE_DIR" 2>/dev/null || return 0
   tmp=$(mktemp "$USAGE_STATE_DIR/.resp.XXXXXX") || return 0
@@ -278,6 +317,46 @@ _cache_write() {
   rm -f "$tmp"
   return 0
 }
+
+# --- 429 backoff -------------------------------------------------------------
+# A 429 is the ONE failure class where retrying on schedule makes things worse:
+# the endpoint is telling us this cadence is too fast, and launchd would ask again
+# in 5 minutes regardless, which is how a meter stays throttled for days. So only
+# 429 backs off. An expired token (401) or a dropped network costs the endpoint
+# nothing to retry and recovers the instant the user fixes it — backing those off
+# would keep a meter dark long after it could have come back.
+#
+# Deliberately --update only: the daemon is what earns the throttle, and a human
+# who types --print wants an answer, not a refusal from a state file.
+_backoff_active() {
+  [ -f "$BACKOFF_FILE" ] || return 1
+  local deadline now
+  deadline=$(cut -d' ' -f1 < "$BACKOFF_FILE" 2>/dev/null)
+  case "$deadline" in ''|*[!0-9]*) return 1 ;; esac
+  now=$(date +%s)
+  [ "$now" -lt "$deadline" ]
+}
+
+_backoff_arm() {
+  [ "${BACKOFF_BASE:-0}" -gt 0 ] 2>/dev/null || return 0   # 0 = backoff disabled
+  local n delay deadline
+  n=$(cut -d' ' -f2 < "$BACKOFF_FILE" 2>/dev/null)
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  n=$(( n + 1 ))
+  # Doubling from BACKOFF_BASE, capped: 10m, 20m, 40m, then hourly.
+  delay="$BACKOFF_BASE"
+  local i=1
+  while [ "$i" -lt "$n" ] && [ "$delay" -lt "$BACKOFF_MAX" ]; do
+    delay=$(( delay * 2 )); i=$(( i + 1 ))
+  done
+  [ "$delay" -gt "$BACKOFF_MAX" ] && delay="$BACKOFF_MAX"
+  deadline=$(( $(date +%s) + delay ))
+  mkdir -p "$USAGE_STATE_DIR" 2>/dev/null || return 0
+  printf '%s %s\n' "$deadline" "$n" > "$BACKOFF_FILE" 2>/dev/null || true
+  echo "ERR: backing off ${delay}s after a 429 (attempt $n) — not calling the endpoint again until then" >&2
+}
+
+_backoff_clear() { rm -f "$BACKOFF_FILE" 2>/dev/null || true; }
 
 fetch_usage() { # $1 = token. Prints the body on success; else returns a FETCH_* class.
   local out rc code body cached
@@ -332,6 +411,28 @@ humanize_until() {
   if   [ "$d" -gt 0 ]; then echo "${d}d ${h}h"
   elif [ "$h" -gt 0 ]; then echo "${h}h ${m}m"
   else echo "${m}m"; fi
+}
+
+# elapsed seconds -> compact age: "<1m" | "12m" | "1h 5m" | "2d 3h"
+humanize_age() {
+  local s="${1:-0}" d h m
+  case "$s" in ''|*[!0-9]*) echo "?"; return ;; esac
+  d=$(( s/86400 )); h=$(( (s%86400)/3600 )); m=$(( (s%3600)/60 ))
+  if   [ "$d" -gt 0 ]; then echo "${d}d ${h}h"
+  elif [ "$h" -gt 0 ]; then echo "${h}h ${m}m"
+  elif [ "$m" -gt 0 ]; then echo "${m}m"
+  else echo "<1m"; fi
+}
+
+# The detail segment of a meter row. Fresh: "4% (1h 53m)". Grace paint: "4% · 12m
+# old". The reset countdown is DROPPED while stale, and not because it went wrong —
+# resets_at is absolute, so it stays correct. The row has one narrow right-hand
+# column, and between "when this window resets" and "how old this number is", only
+# the second one can mislead you into thinking you have headroom you spent. So the
+# age takes the space, and the row stays the same width it always was.
+meter_detail() { # $1 = pct, $2 = parenthesized inner text when fresh
+  if [ -n "$STALE_AGE" ]; then printf '%s%% · %s old' "$1" "$(humanize_age "$STALE_AGE")"
+  else printf '%s%% (%s)' "$1" "$2"; fi
 }
 
 # integer percent (0-100) -> unicode block bar with 1/8-cell resolution for a
@@ -493,7 +594,17 @@ main() {
 
   token=$(read_token) || { [ "$mode" = "--update" ] && mark_offline "no token"; exit 1; }
   local marker why frc
-  json=$(fetch_usage "$token"); frc=$?
+  if [ "$mode" = "--update" ] && _backoff_active; then
+    # Still inside a 429 backoff window: don't call the endpoint at all. The row
+    # is painted below from the grace body (or falls back to the marker), so the
+    # age keeps counting up and the panel still tells the truth.
+    frc="$FETCH_RATE"; json=""
+  else
+    json=$(fetch_usage "$token"); frc=$?
+    if [ "$frc" -eq "$FETCH_OK" ]; then _backoff_clear
+    elif [ "$frc" -eq "$FETCH_RATE" ] && [ "$mode" = "--update" ]; then _backoff_arm
+    fi
+  fi
   if [ "$frc" -ne "$FETCH_OK" ]; then
     # The marker rides the TITLE, so it stays short; `why` is the recovery, and it
     # lands in the launchd .err where the doctor now surfaces it.
@@ -504,8 +615,18 @@ main() {
       "$FETCH_NET")    marker="offline"; why="couldn't reach api.anthropic.com (offline, DNS, or timeout)" ;;
       *)               marker="offline"; why="the usage endpoint returned an unexpected HTTP status (logged above)" ;;
     esac
-    [ "$mode" = "--update" ] && mark_offline "$marker"
-    die "usage request failed: $why"
+    local stale=""
+    [ "$mode" = "--update" ] && stale=$(_stale_read)
+    if [ -n "$stale" ]; then
+      # Inside the grace window: re-enter the NORMAL render with the last good
+      # body, so every row (bar, severity dot, model name, spend) is built by the
+      # one code path that is already proven. Only the detail text changes, and
+      # only because STALE_AGE is set. No freshness stamp, non-zero exit.
+      json="$stale"; STALE_AGE=$(_cache_age); STALE_WHY="$why"
+    else
+      [ "$mode" = "--update" ] && mark_offline "$marker"
+      die "usage request failed: $why"
+    fi
   fi
 
   if [ "$mode" = "--raw" ]; then
@@ -609,8 +730,8 @@ main() {
     # communicates "usage", so repeating "resets" wastes the narrow right column.
     # ASCII-led so cmux's multibyte-prefix coalescer bug can't eat it; the optional
     # severity dot only ever trails.
-    fh_lbl="${fh_pct}% (${fh_human})${fh_dot}"
-    sd_lbl="${sd_pct}% (${sd_human})${sd_dot}"
+    fh_lbl="$(meter_detail "$fh_pct" "$fh_human")${fh_dot}"
+    sd_lbl="$(meter_detail "$sd_pct" "$sd_human")${sd_dot}"
     # _meter_write resolves each sentinel FRESH by title label (across windows), then
     # writes BOTH the title (unicode-bar fallback + anchor) and the native progress
     # bar. The `ping` gate passing does NOT guarantee the write lands (socket auth
@@ -637,7 +758,7 @@ main() {
         # detail on its first space would not.
         local m_bar m_dot m_frac m_lbl
         m_bar=$(make_bar "$m_pct" 14); m_dot=$(sev_dot "$m_pct"); m_frac=$(to_frac "$m_pct")
-        m_lbl="${m_pct}% (${m_human})${m_dot}"
+        m_lbl="$(meter_detail "$m_pct" "$m_human")${m_dot}"
         paint_meter "$LABEL_M7D" "$LABEL_M7D |${m_lbl}|${m_bar}|${m_name}" "$m_frac" "$m_lbl" \
           && { painted=$((painted + 1)); wrote="${wrote}${LABEL_M7D}=${m_pct}% (${m_human})  "; }
       else
@@ -652,7 +773,7 @@ main() {
       if [ "$sp_used" != 0 ]; then
         local sp_bar sp_dot sp_frac sp_lbl
         sp_bar=$(make_bar "$sp_pct" 14); sp_dot=$(sev_dot "$sp_pct"); sp_frac=$(to_frac "$sp_pct")
-        sp_lbl="${sp_pct}% (${sp_used_txt} of ${sp_limit_txt})${sp_dot}"
+        sp_lbl="$(meter_detail "$sp_pct" "${sp_used_txt} of ${sp_limit_txt}")${sp_dot}"
         paint_meter "$LABEL_SPEND" "$LABEL_SPEND |${sp_lbl}|${sp_bar}" "$sp_frac" "$sp_lbl" \
           && { painted=$((painted + 1)); wrote="${wrote}${LABEL_SPEND}=${sp_used_txt}  "; }
       else
@@ -676,6 +797,14 @@ main() {
     # answers "is the meter installed". Conflating them is what made one closed
     # workspace read as a dead poller — and made the stale line's "run --update"
     # advice fail with the very same error.
+    # A grace paint is NOT fresh data: no stamp, non-zero exit, and the reason in
+    # the launchd .err where the doctor replays it. The doctor's own stale warning
+    # (default 900s) therefore still fires WHILE the rows are still showing numbers
+    # — which is the intended overlap: the panel stays useful, the health report
+    # stays honest, and neither one has to guess what the other means.
+    if [ -n "$STALE_AGE" ]; then
+      die "usage request failed: $STALE_WHY — kept the last good data ($(humanize_age "$STALE_AGE") old) on ${wrote:+the meters}${wrote:-nothing}; rows fall back to the marker after ${STALE_GRACE}s"
+    fi
     record_success || echo "WARN: meters updated, but couldn't record Claude freshness in $USAGE_STATE_DIR" >&2
     echo "updated: ${wrote%  }"
     # Still an error — a missing sentinel is a meter nobody can see.
