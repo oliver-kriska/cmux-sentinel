@@ -9,7 +9,7 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
 
 `~/bin/cmux-sentinel-doctor.sh` reports the version you actually have.
 
-## Unreleased
+## 0.2.2 — 2026-08-31
 
 ### Fixed
 
