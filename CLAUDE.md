@@ -217,9 +217,9 @@ cmux-sentinel doctor                   # dispatcher: setup/doctor/version/usage/
 make sidebar-live                     # mount repo sidebar against live data; human visual verdict
 
 # offline tests (stub cmux/security/curl/stat/$HOME — run in CI too)
-make test   # bridge-state(58) poller-gate(111) codex-poller(83) install-hooks(62) sentinel-setup(69)
+make test   # bridge-state(58) poller-gate(130) codex-poller(83) install-hooks(62) sentinel-setup(69)
             # sentinel-doctor(49) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
-            # amp-bridge(43) amp-poller(49) entrypoint(33) formula(18) = 660 assertions total
+            # amp-bridge(43) amp-poller(49) entrypoint(33) formula(18) = 679 assertions total
 ```
 
 ## Architecture / where things live
@@ -428,9 +428,10 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
 - **The usage poller caches its last good response (`CMUX_SENTINEL_USAGE_CACHE_TTL`, default
   60s).** The documented way to use this tool — `--print` to look, then `--update` to paint — was
   two API calls seconds apart on top of the 5-minute launchd poll, and that burst is what trips
-  the endpoint's 429. Only SUCCESSES are cached: a failed response must stay visible as
-  `⚠ rate limit`/`⚠ auth` and the next poll must retry the network, never replay the error.
-  `TTL=0` disables it. Cache file is `$USAGE_STATE_DIR/<provider>.last-response.json`, mode 600
+  the endpoint's 429. Only SUCCESSES are cached: a failed response is never written to the cache
+  and the next poll must retry the network, never replay the error. `TTL=0` disables it.
+  (What the row DISPLAYS during a failure is a separate question — see the grace bullet below.
+  The rule here is about never storing an error, and that is unchanged.) Cache file is `$USAGE_STATE_DIR/<provider>.last-response.json`, mode 600
   (it is an account-scoped usage body — treat it like `--raw-full`).
   **Probe the mtime with GNU `stat -c` FIRST, then BSD `stat -f` — the order is load-bearing and
   getting it backwards is invisible on macOS.** The two flavours are NOT symmetric: BSD rejects
@@ -444,6 +445,32 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
   (`STUB_STAT=gnu|bsd`, unset delegates to the real binary) — reach for that stub before trusting
   a green local run on anything mtime-shaped. Same lesson as the empty-read traps above: a suite
   that passes on your OS is not evidence about the other one.
+- **A failed fetch keeps the numbers for a bounded, LABELLED grace window — and only 429 backs
+  off.** Reported 2026-08-31 from a second install: all three Claude rows sat on `⚠ rate limit`
+  while Claude Code's own `/usage` showed 6% / 50% / 63%. One 429 wipes every Claude row at once
+  (`mark_offline` paints the marker AND clears the native bar), and the next poll asked again five
+  minutes later on the exact cadence that earned the 429. The 60s burst cache cannot help: launchd's
+  interval is 300s, so it has always expired — by design, it only ever collapses a human
+  `--print`→`--update` burst. Two changes, deliberately shaped so the old rule survives:
+  **(1) grace.** `CMUX_SENTINEL_STALE_GRACE` (default 1800s, `0` = old behaviour) lets a failed
+  `--update` re-enter the NORMAL render with the stored last-good body — same bar, dot, model name,
+  spend logic, one proven code path — with only the detail text changing. It is never quiet: the
+  reset countdown is REPLACED by the age (`4% · 12m old`), no freshness is stamped, and the run still
+  exits non-zero with the reason in the launchd `.err`. So the doctor's stale warning (900s) fires
+  WHILE the rows still show numbers — that overlap is intended, not a bug: the panel stays useful and
+  the health report stays honest. The countdown is what gets sacrificed for width because `resets_at`
+  is absolute and stays correct while stale, whereas a percentage that looks live is the one that can
+  cost you money. Past the window the rows go back to `⚠`, which is what keeps this from being
+  "serve stale numbers forever". **(2) 429-only backoff.** `_backoff_arm` defers the next call by
+  10/20/40min (`CMUX_SENTINEL_BACKOFF_BASE`/`_MAX`, base `0` disables) and a success clears it. A 401
+  or a dead network is NOT backed off — retrying costs the endpoint nothing and recovers the instant
+  the user fixes it, so deferring those would only keep a meter dark. Backoff is `--update` only: a
+  human typing `--print` wants an answer, not a refusal from a state file. **Trap for whoever writes
+  the next test here:** two back-to-back runs in a test are inside the 60s burst cache, so the second
+  never reaches the stub curl and the case silently proves nothing — pass
+  `CMUX_SENTINEL_USAGE_CACHE_TTL=0` to get the production 300s shape. `reset` in
+  `tests/poller-gate.sh` must also delete the backoff file, or one case's 429 suppresses the next
+  case's fetch. Regression tests: `tests/poller-gate.sh` T13.
 - **A provider may not HAVE a window we model — and a dead meter is NOT free.** A sentinel is
   an ordinary workspace, so a permanently-`n/a` row still eats one of the ⌘1…⌘9 keys to show
   nothing. OpenAI dropped the **5h window for Codex Pro** — confirmed permanent 2026-07-16
