@@ -9,6 +9,36 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
 
 `~/bin/cmux-sentinel-doctor.sh` reports the version you actually have.
 
+## Unreleased
+
+### Added
+
+- **Working rows for every agent cmux knows, no bridge required (cmux ≥ 0.64.23).** cmux now hands
+  custom sidebars its own per-agent state, so Codex, opencode, Amp and Claude sessions show
+  `Working…` even without `--with-bridge` — and `Working… ×2` when two agents work in one
+  workspace. The bridge still adds `⏳ compacting` and Claude's `❓`. cmux's own "needs input" is
+  ignored for Claude: cmux raises it about a minute after every finished Claude turn, which would
+  turn every resting workspace orange.
+- **Group headers show the group's name (cmux ≥ 0.64.23)** with a stack icon, read straight from
+  cmux — no `GROUP_NAME_SYNC` needed.
+- **The doctor spots a `workspaces.js` that hides this sidebar.** cmux 0.64.23 added JavaScript
+  sidebars and loads `.js` ahead of `.swift` for the same name — and cmux's own example file is
+  called `workspaces.js`. The doctor also prints the cmux version, says when the deployed sidebar
+  predates native agent/group data, and stops warning about a missing bridge or group sync when
+  cmux already covers it.
+
+### Fixed
+
+- **Amp meters went `⚠ no data` after Amp reworded `amp usage`** (`agent usage $5.27 of $20
+  remaining (26%)`, where it used to print `74% other usage … remaining`). Both wordings parse; a
+  percentage that isn't explicitly *remaining* is still refused rather than guessed.
+- **`⌘N` hints next to group rows were off.** Since cmux 0.64.22 a group's header row and the
+  members of a collapsed group take no digit, which shifts every row below them; the sidebar now
+  numbers rows the same way cmux does.
+- **The doctor no longer asks you to re-park meters when that can't help.** With fewer than nine
+  real workspaces some meter has to take a ⌘ key however the rows are ordered; that is now reported
+  as a note instead of a warning that re-running setup could never clear.
+
 ## 0.2.2 — 2026-08-31
 
 ### Fixed

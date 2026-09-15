@@ -17,16 +17,18 @@ background pollers. Batteries included, easy to fork and tweak.
 ## Features
 
 - **Flat workspace list** in your manual order, SF Mono, Ayu-Mirage palette.
-- **Live agent row states** (via Claude Code hooks or the Amp plugin): `compacting` (purple), `working`
-  (green), `needs you` (orange — unread, or the agent asked a question / hit a permission prompt),
-  and `idle` (dim). Idle repo rows omit redundant `idle`; active rows keep activity and repo state
+- **Live agent row states** (via Claude Code hooks or the Amp plugin, and — on cmux ≥ 0.64.23 —
+  cmux's own native agent state for every agent it integrates, no bridge needed): `compacting`
+  (purple), `working` (green, `×2` when several agents work in one workspace), `needs you` (orange —
+  unread, or the agent asked a question / hit a permission prompt), and `idle` (dim). Idle repo rows omit redundant `idle`; active rows keep activity and repo state
   separate. The header shows action-needed first, then working and compacting counts.
 - **Inline actions**: click to select, an always-visible high-contrast `×` to close, pin indicators,
   unread badges, and honest `⌘N` hints that preserve cmux's real shortcut gaps.
-- **Workspace-group names** (opt-in) — cmux gives custom sidebars no group data, so a group shows
-  its anchor's generic "Group 2" instead of its real name. A small background sync
-  (`GROUP_NAME_SYNC=1`) keeps each group's anchor title in step with the group name (see "Workspace
-  group names" below). Off by default; a no-op if you don't use groups.
+- **Workspace-group names** — on cmux ≥ 0.64.23 the sidebar reads groups directly: a group's
+  header row shows the group's real name with a stack icon, and takes no `⌘N` digit (matching
+  cmux's own numbering). Older cmux gave custom sidebars no group data, so there an opt-in
+  background sync (`GROUP_NAME_SYNC=1`) keeps each anchor title in step with the group name (see
+  "Workspace group names" below).
 - **Usage meters** — provider-labelled native progress bars fed by background pollers. Ships with
   **Claude Code** (5-hour session + 7-day week), **Codex** (whatever short/weekly windows the account
   currently reports), and **Amp** (monthly thread allowance plus opt-in orb allowance). The title
@@ -46,13 +48,20 @@ cmux custom sidebars are runtime-interpreted SwiftUI-style files. The sidebar ca
 fixed set of per-workspace fields — it **cannot** fetch URLs or read arbitrary data. Two
 mechanisms feed it:
 
-1. **Agent row states** — Claude Code hooks or `hooks/amp-bridge.ts` → `hooks/cmux-bridge.sh` → a STATIC marker on the
+1. **Agent row states** — two sources, either one lights a row. **(a)** cmux ≥ 0.64.23 binds
+   `workspaces[i].agents` — cmux's own hook-driven per-agent state (Claude, Codex, opencode, Amp, …)
+   — so `working` shows with no bridge at all. **(b)** Claude Code hooks or `hooks/amp-bridge.ts` →
+   `hooks/cmux-bridge.sh` → a STATIC marker on the
    *active* workspace's **title** (`⚡` working, `⏳` compacting, `❓` waiting-on-you — an agent that
    asked a question or hit a permission prompt), reference-counted so multiple agents in one
    workspace don't stomp it and dead sessions can't strand it. Precedence is compacting > waiting >
    working. The sidebar detects the marker, colours the row, and strips the glyph for display.
    Agent state stays in the title because it must survive app/process boundaries and be shared by
-   co-tenant agents; an animated marker would freeze cmux's title coalescer.
+   co-tenant agents; an animated marker would freeze cmux's title coalescer. The bridge is still
+   what gives you `⏳ compacting` (cmux's native state has no such status) and a trustworthy Claude
+   `❓` — cmux flags a Claude session as needing input ~60s after every finished turn (Claude's idle
+   notification), so the sidebar ignores native `needs_input` for Claude and uses it only for other
+   agents.
 2. **Usage meters** — a poller (run by launchd every few minutes) computes each metric and writes
    it into a dedicated idle **"sentinel" workspace** using both `set-progress` (the native bar and
    label) and a title rename (stable anchor + fallback). The sidebar matches sentinels by title
@@ -173,8 +182,9 @@ remaining manual steps. In short:
 
 `WITH_BRIDGE=1 ./install.sh` installs the bridge **and auto-wires** the Claude Code hook events
 into `~/.claude/settings.json` (idempotent, backed up) — then **restart Claude Code** so the new
-events register. Without the bridge, every row shows `idle`; with it you get `⚡ working` /
-`⏳ compacting` / `❓ waiting-on-you`.
+events register. With it you get `⚡ working` / `⏳ compacting` / `❓ waiting-on-you`. Without it, a
+cmux older than 0.64.23 shows every row `idle`; 0.64.23+ still shows `working` from cmux's native
+agent state, but not `compacting` or Claude's `waiting-on-you`.
 
 If the installer couldn't edit `settings.json` (no `jq`, or it wasn't valid JSON), add this under
 `"hooks"` by hand (keep any existing hooks; all entries are fire-and-forget), then restart Claude
@@ -400,6 +410,14 @@ per hook event. It runs detached with its output discarded — it is on the agen
 notifier that hangs or fails can never stall a turn; keep it a quick fire. Nothing else is
 notifiable by design: an alert you get for every state change is an alert you learn to ignore.
 
+**Other agents, without the bridge (cmux ≥ 0.64.23):** cmux has its own rule engine in
+`~/.cmuxterm/automations.json` that can `notify` / `run` / `webhook` on `agent.needs_input` for any
+agent cmux integrates (see cmux's `docs/automations.md`; `cmux automation test <id> --event …` is a
+dry run). One caveat for Claude sessions: cmux treats Claude's routine "waiting for your input"
+notification, which arrives about a minute after every finished turn, as needing input — the
+exact false alarm the bridge filters out. So keep `CMUX_SENTINEL_NOTIFY_CMD` for Claude and use a
+cmux automation for the others.
+
 ### Meter a per-model weekly cap (optional)
 
 Anthropic publishes a per-model weekly cap alongside the account-wide `5h`/`7d` windows — today a
@@ -500,8 +518,14 @@ Keychain or `~/.claude/.credentials.json` each run; never copied into this repo 
 
 ## Workspace group names
 
-cmux **workspace groups** (collapsible groups in the sidebar) have a logical name, but a custom
-sidebar can't see it: cmux passes the interpreter **no group data at all** — no `groups` list, no
+**On cmux ≥ 0.64.23 there is nothing to set up.** cmux now binds `groups` into custom sidebars, so
+the sidebar draws each group's header row with the group's own name (plus a stack icon) and leaves
+it — and the members of a collapsed group — out of the `⌘N` digits, exactly as cmux numbers them.
+`GROUP_NAME_SYNC` becomes redundant (leaving it on is harmless). The rest of this section applies to
+older cmux.
+
+cmux **workspace groups** (collapsible groups in the sidebar) have a logical name, but before 0.64.23 a
+custom sidebar couldn't see it: cmux passed the interpreter **no group data at all** — no `groups` list, no
 per-workspace group field, nothing in `extension.sidebar.snapshot` (verified by probe). A group's
 header *is* its **anchor** workspace's row, and the anchor's `title` is a **separate field** from the
 group's name — they diverge the moment you rename the group. So the sidebar shows the anchor's
@@ -521,8 +545,7 @@ it doesn't churn cmux's title coalescer). It's **opt-in** and a no-op until you 
 
 It's multi-window aware (groups are window-scoped; launchd has no window context) and needs no
 credentials or network. `~/bin/cmux-sentinel-doctor.sh` reports whether it's enabled, loaded, and
-whether any anchors are out of sync. If cmux exposes group data to custom sidebars later, the sync
-bridge can retire.
+whether any anchors are out of sync — or, on 0.64.23+, that the sidebar already shows names natively.
 
 ---
 

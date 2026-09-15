@@ -8,7 +8,9 @@
 # group.name on the group header, but a custom sidebar gets NO group data at all —
 # proven: `extension.sidebar.snapshot` carries no group fields, and the sidebar
 # interpreter exposes no `groups` binding (probed 2026-06-19, see
-# .claude/research/2026-06-19-workspace-group-names-in-sidebar.md). The only
+# .claude/research/2026-06-19-workspace-group-names-in-sidebar.md). cmux 0.64.23
+# added a `groups` binding and the sidebar now reads names from it, so this sync
+# only matters on older cmux (the doctor calls it redundant on 0.64.23+). The only
 # per-workspace channel a custom sidebar CAN read is the TITLE — the same lever the
 # usage meters and the agent-state bridge already ride. So this poller reads
 # `cmux workspace-group list` and renames each group's ANCHOR workspace to the

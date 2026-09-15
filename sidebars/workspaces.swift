@@ -38,13 +38,47 @@ func hasProgressLabel(_ w) -> Bool {
 }
 
 // ── dimension 1: agent activity ───────────────────────────────────
-// "Working" is detected from a marker the bridge injects at the FRONT of the
-// TITLE ("⚡ name"). Agent state rides the title (not `progress`) because it must
-// be persistent and precedence-ordered; `progress` reaches the sidebar on 0.64.17
-// but is transient (meters use it — see meterRow). The interpreter's `.hasPrefix`
-// works here (proven), so we detect the marker on the title.
+// Two sources, OR-ed, so every cmux version keeps working:
+//   1. STATIC title markers the bridge injects at the FRONT of the TITLE ("⚡ name").
+//      Persistent, precedence-ordered, and the ONLY source of ⏳ compacting.
+//   2. cmux ≥ 0.64.23 projects its own hook-driven session registry as
+//      `w.agents[]` (kind / status / lastActivityAt). That lights up EVERY agent
+//      cmux hooks — Codex, opencode, pi, cursor… — with no adapter of ours. On an
+//      older cmux the field is simply absent and only the markers count.
+// TRAP: `w.agents != nil` is ALWAYS false on this interpreter, even with agents
+// present (arrays don't compare to nil; dictionaries like `w.pr` do). Guard with
+// `.count > 0`, which is false for an absent array. Also: `var` mutation and
+// `return` inside a `for` loop silently do nothing here — use `.filter { }`, whose
+// closures DO capture outer names. All probed 2026-09-15.
+// A native `working` untouched for an hour is treated as stale: a turn that ends
+// without a Stop hook (Esc interrupt, a plugin host that never exits) otherwise
+// reads "working" forever. Same reasoning and the same default as the bridge's
+// CMUX_SENTINEL_WORK_TTL; `lastActivityAt` advances on every hook event, so only a
+// single tool call running past an hour could be dropped early.
+func workingAgentCount(_ w) -> Int {
+  if w.agents.count > 0 {
+    return w.agents.filter { $0.status == "working" && clock.epoch - $0.lastActivityAt < 3600 }.count
+  }
+  return 0
+}
+// cmux's `needs_input` is trusted for every agent EXCEPT Claude. cmux's reducer
+// maps ANY Claude `Notification` hook to needs_input, including the idle "waiting
+// for your input" notice Claude sends ~61s after every turn ends (measured in
+// ~/.cmuxterm/events.jsonl). Trusting it would flip every finished Claude workspace
+// to "needs you" a minute later — the done-marker behaviour that was rejected. The
+// bridge's ❓ already reports Claude precisely (it gates that notice out), so Claude
+// stays on the marker; Codex approvals, Cursor prompts etc. come from cmux.
+func agentNeedsInput(_ w) -> Bool {
+  if w.agents.count > 0 {
+    return w.agents.filter { $0.status == "needs_input" && $0.kind != "claude" }.count > 0
+  }
+  return false
+}
+// "Working" = the bridge's ⚡ marker OR a live native agent. The interpreter's
+// `.hasPrefix` works here (proven), so the marker is detected on the title.
 func isWorking(_ w) -> Bool {
-  return w.title.hasPrefix("⚡")
+  if w.title.hasPrefix("⚡") { return true }
+  return workingAgentCount(w) > 0
 }
 // Compacting is a distinct busy sub-state: the bridge swaps the working marker
 // for "⏳" while Claude compacts its context (PreCompact→PostCompact). Static
@@ -57,9 +91,12 @@ func isCompacting(_ w) -> Bool {
 // it asked a question (AskUserQuestion / ExitPlanMode) or hit a permission/idle
 // prompt. The session is alive but parked, so this beats "working" and rides the
 // orange needs-you treatment. Markers are mutually exclusive (one leading glyph),
-// so isWaiting ⇒ !isWorking && !isCompacting.
+// so isWaiting ⇒ !isWorking && !isCompacting — for the MARKER. A native non-Claude
+// agent asking for approval counts too (see agentNeedsInput), and waiting outranks
+// working wherever both hold, matching the bridge's precedence.
 func isWaiting(_ w) -> Bool {
-  return w.title.hasPrefix("❓")
+  if w.title.hasPrefix("❓") { return true }
+  return agentNeedsInput(w)
 }
 // needs-you = Claude is waiting on you (the ❓ marker) OR there are unread
 // messages while no agent is mid-turn. Working/compacting outrank a bare unread.
@@ -73,7 +110,20 @@ func needsYou(_ w) -> Bool {
 // displayed title. `.split` keeps the rest of the name intact (spaces and all);
 // cmux trims a leading zero-width space, so a visible marker + strip is the only
 // way to get a clean title.
+// A workspace-group ANCHOR shows its group's NAME. The anchor's own title does not
+// follow a group rename (they diverge), which is why cmux-group-sync.sh used to copy
+// the name into the title. cmux ≥ 0.64.23 binds `groups` directly, so the sidebar
+// reads it; on an older cmux `groups` is empty and the title path below runs as before.
+func groupName(_ w) -> String {
+  let named = groups.filter { $0.anchorId == w.id && $0.name != "" }
+  if named.count > 0 { return named[0].name }
+  return ""
+}
+func isGroupAnchor(_ w) -> Bool {
+  return groups.filter { $0.anchorId == w.id }.count > 0
+}
 func displayTitle(_ w) -> String {
+  if groupName(w) != "" { return groupName(w) }
   if w.title.hasPrefix("⏳") {
     let parts = w.title.split(separator: "⏳")
     if parts.count > 0 { return String(parts[0]) }
@@ -91,8 +141,10 @@ func displayTitle(_ w) -> String {
   }
   return w.title
 }
+// "×N" only when cmux reports more than one live agent — the markers can't count.
 func workLabel(_ w) -> String {
   if hasProgressLabel(w) { return w.progress.label }
+  if workingAgentCount(w) > 1 { return "Working… ×\(workingAgentCount(w))" }
   return "Working…"
 }
 func activityText(_ w) -> String {
@@ -340,20 +392,36 @@ func meterRow(_ w) -> some View {
 
 // ── ⌘N shortcut digit ─────────────────────────────────────────────
 // The gray gutter digit is the workspace's REAL ⌘N key, mirrored from cmux's own
-// WorkspaceShortcutMapper (Sources/App/TerminalDirectoryOpenSupport.swift) so the
-// badge can never drift from the keystroke. Two things that logic dictates and a
-// naive 1..N counter would get WRONG:
-//   1. ⌘9 is NOT "the 9th" — it always targets the LAST workspace, so the digit
+// WorkspaceShortcutMapper so the badge can never drift from the keystroke. Three
+// things that logic dictates and a naive 1..N counter would get WRONG:
+//   1. ⌘9 is NOT "the 9th" — it always targets the LAST numbered row, so the digit
 //      hangs off the end of the list, not off position 9.
-//   2. The number indexes cmux's FULL workspace list (`manager.tabs`), which
-//      includes the usage sentinels. cmux has no notion of a "sentinel" — that
-//      concept lives only in this file's predicates — so the meters silently eat
-//      ⌘ slots and the visible rows have gaps. Numbering the visible rows 1..N
-//      instead would be a lie that makes ⌘N worse, so we key on w.index.
-// 0 = this row has no ⌘ key at all (indices 8…count-2 are unreachable).
+//   2. The numbering includes the usage sentinels. cmux has no notion of a
+//      "sentinel" — that concept lives only in this file's predicates — so the
+//      meters silently eat ⌘ slots and the visible rows have gaps. Numbering the
+//      visible rows 1..N instead would be a lie that makes ⌘N worse.
+//   3. Since 0.64.22 (#9176) cmux numbers only its ORDINARY sidebar rows: a group's
+//      ANCHOR (drawn as the group header) and every member of a COLLAPSED group are
+//      skipped, and each skip pulls every row below it one key up. This file used
+//      raw `w.index` and got that wrong for anyone with groups; `groups` is bindable
+//      since 0.64.23, so it now mirrors the same rule as JQ_NUMBERED in
+//      bin/cmux-sentinel-setup.sh / -doctor.sh. Without groups it reduces exactly to
+//      the old index math.
+// 0 = this row has no ⌘ key at all (positions 8…count-2 are unreachable).
+func inCollapsedGroup(_ w) -> Bool {
+  return groups.filter { $0.id == w.group && $0.collapsed == true }.count > 0
+}
+func isNumbered(_ w) -> Bool {
+  if isGroupAnchor(w) { return false }
+  if inCollapsedGroup(w) { return false }
+  return true
+}
 func shortcutDigit(_ w) -> Int {
-  if w.index < 8 { return w.index + 1 }             // ⌘1…⌘8 = fixed zero-based index
-  if w.index == workspaceCount - 1 { return 9 }     // ⌘9 = last workspace, whatever its index
+  if !isNumbered(w) { return 0 }
+  let pos = workspaces.filter { isNumbered($0) && $0.index < w.index }.count
+  let total = workspaces.filter { isNumbered($0) }.count
+  if pos < 8 { return pos + 1 }            // ⌘1…⌘8 = numbered position
+  if pos == total - 1 { return 9 }         // ⌘9 = last numbered row, whatever its position
   return 0
 }
 func shortcutLabel(_ w) -> String {
@@ -408,6 +476,10 @@ func row(_ w) -> some View {
           .frame(width: 20)
         VStack(alignment: .leading, spacing: 2) {
           HStack(spacing: 5) {
+            // Group header marker: the anchor row stands for the whole group and has no ⌘ key.
+            if isGroupAnchor(w) {
+              Image(systemName: "square.stack").font(.system(size: 10)).foregroundColor("#8A9199")
+            }
             Text(displayTitle(w))
               .font(.system(size: 14, design: .monospaced))
               .fontWeight(w.selected ? .bold : .medium)

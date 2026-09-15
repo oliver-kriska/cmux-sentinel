@@ -72,20 +72,42 @@ else
   note "no version stamp — installed before v0.2.0, or copied by hand; re-run install.sh to record one"
 fi
 
+# cmux ≥ 0.64.23 binds `workspaces[i].agents` (native agent state) and `groups`
+# into the sidebar. Both are feature-gated on the VERSION because the interpreter
+# can't be asked: an unset binding renders exactly like an absent one. An
+# unreadable version means "can't tell" → no claims either way.
+NATIVE_SIDEBAR_DATA=0.64.23
+cmux_ver=""
+have cmux && cmux_ver="$(cmux --version 2>/dev/null | sed -nE 's/^cmux ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' | head -1)"
+native_data=0
+[ -n "$cmux_ver" ] && ! ver_gt "$NATIVE_SIDEBAR_DATA" "$cmux_ver" && native_data=1
+SIDEBAR_FILE="$CFG/sidebars/workspaces.swift"
+sidebar_reads() { [ -f "$SIDEBAR_FILE" ] && grep -qF -- "$1" "$SIDEBAR_FILE"; }
+
 echo "• cmux"
 if have cmux; then
-  if cmux ping &>/dev/null; then ok "cmux present and responding"
+  if cmux ping &>/dev/null; then ok "cmux present and responding${cmux_ver:+ (v$cmux_ver)}"
   else bad "cmux installed but 'cmux ping' failed — is the app running?"; fi
 else bad "cmux not on PATH"; fi
 
 echo "• sidebar"
-if [ -f "$CFG/sidebars/workspaces.swift" ]; then
+if [ -f "$SIDEBAR_FILE" ]; then
   ok "sidebar deployed at ~/.config/cmux/sidebars/workspaces.swift"
   if have cmux && cmux sidebar validate workspaces &>/dev/null; then ok "sidebar interprets against validate's synthetic data"
   else warn "sidebar did not validate — run: cmux sidebar validate workspaces"; fi
-  if grep -Eq 'w\.title\.hasPrefix\("(5h|7d) "\)' "$CFG/sidebars/workspaces.swift"; then :
+  if grep -Eq 'w\.title\.hasPrefix\("(5h|7d) "\)' "$SIDEBAR_FILE"; then :
   else warn "deployed sidebar is missing its isClaudeMeter title anchors — usage panel won't render"; fi
+  if [ "$native_data" = 1 ] && ! sidebar_reads 'w.agents'; then
+    note "cmux v$cmux_ver can feed native agent state + group names to the sidebar, but the deployed one predates it — re-run install.sh"
+  fi
 else bad "sidebar not deployed (run ./install.sh)"; fi
+# cmux 0.64.23 added `.js` sidebars, and for ONE base name `.js` beats `.swift`
+# (which beats `.json`). cmux's own examples ship a `workspaces.js` — our exact
+# name — so copying that example silently swaps this sidebar out, with every check
+# above still green. Only `.js` shadows us; a `workspaces.json` loses to `.swift`.
+if [ -f "$CFG/sidebars/workspaces.js" ]; then
+  warn "sidebars/workspaces.js SHADOWS workspaces.swift (.js wins) — cmux is not showing this sidebar; rename it: mv ~/.config/cmux/sidebars/workspaces.js ~/.config/cmux/sidebars/my-workspaces.js"
+fi
 
 echo "• working-state bridge"
 inst="$HOME/.claude/hooks/cmux-bridge.sh"
@@ -113,8 +135,15 @@ if [ -f "$inst" ]; then
   else warn "can't check hook registration (need ~/.claude/settings.json + jq)"; fi
 elif [ -f "$amp_bridge_file" ]; then
   note "Claude bridge not installed — expected for an Amp-only setup"
+elif [ "$native_data" = 1 ] && sidebar_reads 'w.agents'; then
+  # Not a warning any more: cmux's own hooks already light up "Working…" for every
+  # agent it integrates. What only the bridge adds is ⏳ and Claude's precise ❓.
+  note "no bridge installed — Working… still comes from cmux's native agent state; add --with-bridge for ⏳ compacting and Claude's ❓ asking"
 else
   warn "no agent-state bridge installed — working/compacting rows are off (use --with-bridge or --with-amp)"
+fi
+if [ "$native_data" = 1 ] && sidebar_reads 'w.agents'; then
+  ok "sidebar also reads cmux's native agent state (Codex, opencode, Amp, … without adapters)"
 fi
 if [ -f "$amp_bridge_file" ]; then
   ok "Amp shared bridge installed at ~/.config/cmux-sentinel/cmux-bridge.sh"
@@ -458,7 +487,7 @@ if have cmux && have jq; then
       + [ $gs[]? | select(.is_collapsed == true) | .member_workspace_refs[]? ] ) as $x
     | [ .workspaces | sort_by(.index)[] | select( .ref as $r | ($x | index($r)) == null ) ];'
   check_layout() { # $1 = window id; empty means default-window fallback
-    local win="$1" ctx="" lay grp eaten n_ws n_meters first_meter slack
+    local win="$1" ctx="" lay grp eaten n_ws n_meters first_meter slack short
     if [ -n "$win" ]; then
       lay="$(cmux workspace list --window "$win" --json 2>/dev/null)"; ctx=" in window $win"
       grp="$(cmux workspace-group list --window "$win" --json 2>/dev/null)"
@@ -480,6 +509,15 @@ if have cmux && have jq; then
             | .key
             | if . == $n - 1 then "⌘9" elif . <= 7 then "⌘\(. + 1)" else empty end ]
         | unique | join(", ")' 2>/dev/null)"
+    # Fewer numbered REAL workspaces than keyed rows means some meter MUST hold a key:
+    # 8 reals + meters give 9 keys only 8 owners. Setup's best layout (⌘9 real) still
+    # "eats" the difference, so "re-park them" would be advice that can't work and a
+    # warning nobody can clear. $short = "<unavoidable count> <real count>".
+    short="$(printf '%s' "$lay" | jq -r --argjson ls "$lay_labels" --argjson gs "$grp" "$JQ_NUMBERED"'
+        (numbered($gs)) as $rows
+        | ([ $rows[] | select(.title as $t | ($ls | any(. as $l | $t == $l or ($t | startswith($l + " ")))) | not) ] | length) as $reals
+        | ([ ($rows | length), 9 ] | min) - $reals
+        | "\(if . < 0 then 0 else . end) \($reals)"' 2>/dev/null)"
     n_ws="$(printf '%s' "$lay" | jq -r '.workspaces | length' 2>/dev/null)"
     n_meters="$(printf '%s' "$lay" | jq -r --argjson ls "$lay_labels" '
         [ .workspaces[] | select(.title as $t | $ls | any(. as $l | $t == $l or ($t | startswith($l + " ")))) ] | length' 2>/dev/null)"
@@ -488,6 +526,11 @@ if have cmux && have jq; then
       warn "couldn't read the workspace list$ctx — skipping layout check"
     elif [ "${n_meters:-0}" = 0 ]; then
       note "no meters$ctx — nothing to park"
+    elif [ -n "$eaten" ] && [ -n "$short" ] \
+      && [ "$(printf '%s' "$eaten" | tr ',' '\n' | grep -c '⌘')" -le "${short% *}" ] \
+      && { case "$eaten" in *⌘9*) [ "${short#* }" -lt 2 ] ;; *) true ;; esac; }; then
+      # Already the best layout there is (setup only anchors ⌘9 with 2+ reals).
+      note "meters$ctx are eating $eaten — unavoidable with ${short#* } real workspace(s) for 9 keys; nothing to re-park"
     elif [ -n "$eaten" ]; then
       warn "meters$ctx are eating $eaten — re-park them: $HERE/cmux-sentinel-setup.sh"
     else
@@ -580,8 +623,8 @@ else
   note "cmux or jq unavailable — skipping snapshot check"
 fi
 
-# Workspace-group names (opt-in). cmux passes custom sidebars NO group data, so a
-# group renders its anchor workspace's title (often a generic "Group N") instead of
+# Workspace-group names (opt-in). Before 0.64.23 cmux passed custom sidebars NO group
+# data, so a group rendered its anchor workspace's title (often a generic "Group N") instead of
 # the group name. cmux-group-sync.sh keeps anchor titles in sync when
 # GROUP_NAME_SYNC=1. This cross-checks groups-present × enabled × in-sync and only
 # nags when something is actually off. See
@@ -604,8 +647,15 @@ if have cmux && have jq; then
     done < <(cmux workspace-group list --window "$w" --json 2>/dev/null \
       | jq -r '.groups[]? | select(.name != null and .name != "") | "\(.name)\t\(.anchor_workspace_ref)"' 2>/dev/null)
   done < <(cmux list-windows --json 2>/dev/null | jq -r '.[].id // empty' 2>/dev/null)
+  native_groups=0
+  [ "$native_data" = 1 ] && sidebar_reads 'groups.filter' && native_groups=1
   if [ "$ngroups" = 0 ]; then
     note "no workspace groups — nothing to sync"
+  elif [ "$native_groups" = 1 ]; then
+    # cmux ≥ 0.64.23 binds `groups`, and the sidebar draws each anchor row with its
+    # group's name — a diverged anchor TITLE no longer shows, so it isn't drift.
+    ok "sidebar shows group names natively ($ngroups group(s), cmux v$cmux_ver)"
+    [ "$gsync" = 1 ] && note "GROUP_NAME_SYNC=1 is redundant on cmux ≥ $NATIVE_SIDEBAR_DATA (harmless — it only renames anchor titles)"
   elif [ "$gsync" = 1 ]; then
     if launchctl list 2>/dev/null | grep -q com.cmux-group-sync; then ok "group-name sync ON, launchd loaded ($ngroups group(s))"
     else warn "GROUP_NAME_SYNC=1 but launchd job not loaded — launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/com.cmux-group-sync.plist"; fi

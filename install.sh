@@ -407,7 +407,8 @@ cat <<'NEXT'
 3. Verify the whole pipeline:
      ~/bin/cmux-sentinel-doctor.sh        # or, from the repo:  make doctor
 
-(Working-state rows — ⚡ working / ⏳ compacting / ❓ waiting-on-you: run
+(Working-state rows — cmux 0.64.23+ already shows "Working…" from its own agent state.
+ For ⏳ compacting and Claude's ❓ waiting-on-you too, run
  WITH_BRIDGE=1 ./install.sh  — it installs the bridge AND auto-wires the hooks into
  ~/.claude/settings.json. Then RESTART Claude Code so the new hook events register.)
 
@@ -415,9 +416,9 @@ cat <<'NEXT'
  the opt-in Zed integration — a cmux→Zed worktree handoff, agent-state markers, and a
  usage-meter pane. It stays inert until you export ZED_SENTINEL=1. See docs/zed-integration.md.)
 
-(Workspace-GROUP names — if you use cmux workspace groups, the sidebar shows the
- anchor's generic "Group 2" instead of the group's name (cmux gives custom sidebars
- no group data). To fix: set GROUP_NAME_SYNC=1 in ~/.config/cmux/usage-sentinels.env,
+(Workspace-GROUP names — cmux 0.64.23+ shows them natively, nothing to do. On older
+ cmux the sidebar shows the anchor's generic "Group 2" instead of the group's name
+ (no group data reached custom sidebars). To fix: set GROUP_NAME_SYNC=1 in ~/.config/cmux/usage-sentinels.env,
  try it with `~/bin/cmux-group-sync.sh --list`, then start it:
    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cmux-group-sync.plist )
 

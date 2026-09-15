@@ -38,6 +38,38 @@ printf '{"present":true}\n' > "$HOME/.local/share/amp/secrets.json"
 cat > "$ROOT/bin/cmux" <<'FAKE'
 #!/bin/bash
 window_list() {
+  # STUB_WINB reshapes win-b for the "unavoidable vs fixable" ⌘ cases (T16).
+  case "${STUB_WINB:-}" in
+    eight-parked) # 8 reals, meters parked, last real anchors ⌘9 → ⌘8 is unavoidable
+      cat <<'JSON'
+{"workspaces":[
+  {"ref":"w1","index":0,"title":"one"},{"ref":"w2","index":1,"title":"two"},
+  {"ref":"w3","index":2,"title":"three"},{"ref":"w4","index":3,"title":"four"},
+  {"ref":"w5","index":4,"title":"five"},{"ref":"w6","index":5,"title":"six"},
+  {"ref":"w7","index":6,"title":"seven"},
+  {"ref":"w9","index":7,"title":"5h █ 24% · resets 2h"},
+  {"ref":"w10","index":8,"title":"7d ██ 48% · resets 3d"},
+  {"ref":"w11","index":9,"title":"cx7d |8% (3d)|█░"},
+  {"ref":"w12","index":10,"title":"ampu |12% (1 month)|█░"},
+  {"ref":"w13","index":11,"title":"last-real"}
+]}
+JSON
+      return ;;
+    eight-last) # same 8 reals, meters at the very bottom → ⌘9 is on a meter, and setup CAN fix it
+      cat <<'JSON'
+{"workspaces":[
+  {"ref":"w1","index":0,"title":"one"},{"ref":"w2","index":1,"title":"two"},
+  {"ref":"w3","index":2,"title":"three"},{"ref":"w4","index":3,"title":"four"},
+  {"ref":"w5","index":4,"title":"five"},{"ref":"w6","index":5,"title":"six"},
+  {"ref":"w7","index":6,"title":"seven"},{"ref":"w13","index":7,"title":"last-real"},
+  {"ref":"w9","index":8,"title":"5h █ 24% · resets 2h"},
+  {"ref":"w10","index":9,"title":"7d ██ 48% · resets 3d"},
+  {"ref":"w11","index":10,"title":"cx7d |8% (3d)|█░"},
+  {"ref":"w12","index":11,"title":"ampu |12% (1 month)|█░"}
+]}
+JSON
+      return ;;
+  esac
   cat <<'JSON'
 {"workspaces":[
   {"ref":"w1","index":0,"title":"one"},
@@ -58,6 +90,9 @@ JSON
 }
 
 case "$1" in
+  # Unset STUB_CMUX_VERSION = a cmux whose version can't be read: the doctor must
+  # make no native-data claims at all (the baseline run below relies on that).
+  --version) [ -n "${STUB_CMUX_VERSION:-}" ] && printf 'cmux %s (103) [211b8bb35]\n' "$STUB_CMUX_VERSION"; exit 0 ;;
   ping) exit 0 ;;
   sidebar) [ "$2" = validate ] && exit 0 ;;
   list-windows) printf '[{"id":"win-b"}]\n' ;;
@@ -306,6 +341,99 @@ out14="$(CMUX_SENTINEL_UPDATE_CHECK=0 STUB_LATEST=9.9.9 bash "$DOCTOR" 2>&1)"
 case "$out14" in *"is available"*) bad "checked for updates with the check turned off";;
   *) ok "CMUX_SENTINEL_UPDATE_CHECK=0 skips the network entirely";; esac
 rm -f "$vf"
+
+echo "T13: a workspaces.js silently replaces the sidebar — the doctor must say so"
+# cmux 0.64.23: for one base name `.js` beats `.swift`, and upstream ships an example
+# called workspaces.js. Every other sidebar check stays green while cmux shows the
+# OTHER file, so this is the only line that can catch it.
+case "$out" in *"SHADOWS workspaces.swift"*) bad "baseline (no .js) reported a shadow";;
+  *) ok "no shadow warning without a workspaces.js";; esac
+printf 'sidebar(() => Text("hi"))\n' > "$HOME/.config/cmux/sidebars/workspaces.js"
+out15="$(bash "$DOCTOR" 2>&1)"
+case "$out15" in *"workspaces.js SHADOWS workspaces.swift"*"my-workspaces.js"*) ok "workspaces.js is reported with the rename that fixes it";;
+  *) bad "a shadowing workspaces.js went unreported";; esac
+rm -f "$HOME/.config/cmux/sidebars/workspaces.js"
+# .json LOSES to .swift, so it must not cry wolf.
+printf '{}\n' > "$HOME/.config/cmux/sidebars/workspaces.json"
+out16="$(bash "$DOCTOR" 2>&1)"
+case "$out16" in *"SHADOWS"*) bad "workspaces.json (which loses to .swift) was reported as a shadow";;
+  *) ok "workspaces.json is not a shadow";; esac
+rm -f "$HOME/.config/cmux/sidebars/workspaces.json"
+
+echo "T14: native agent state is claimed only on cmux ≥ 0.64.23 with a sidebar that reads it"
+printf 'USAGE_PROVIDERS="claude"\n' > "$HOME/.config/cmux/usage-sentinels.env"
+case "$out" in *"native agent state"*) bad "an unreadable cmux version produced a native-data claim";;
+  *) ok "unknown cmux version → no native-data claims";; esac
+out17="$(STUB_CMUX_VERSION=0.64.23 bash "$DOCTOR" 2>&1)"
+case "$out17" in *"cmux present and responding (v0.64.23)"*) ok "cmux version is reported";;
+  *) bad "cmux version missing from the cmux line";; esac
+case "$out17" in *"deployed one predates it — re-run install.sh"*) ok "an old sidebar on a new cmux is told to update";;
+  *) bad "old sidebar on cmux 0.64.23 got no update hint";; esac
+cp "$HOME/.config/cmux/sidebars/workspaces.swift" "$ROOT/old-sidebar.swift"
+cat >> "$HOME/.config/cmux/sidebars/workspaces.swift" <<'SWIFT'
+func workingAgentCount(_ w) -> Int { return w.agents.filter { $0.status == "working" }.count }
+func isGroupAnchor(_ w) -> Bool { return groups.filter { $0.anchorId == w.id }.count > 0 }
+SWIFT
+out18="$(STUB_CMUX_VERSION=0.64.23 bash "$DOCTOR" 2>&1)"
+case "$out18" in *"sidebar also reads cmux's native agent state"*) ok "a current sidebar on cmux 0.64.23 reports native agent state";;
+  *) bad "native agent state not reported";; esac
+case "$out18" in *"predates it"*) bad "a current sidebar was told it predates native data";;
+  *) ok "no stale-sidebar hint for a current sidebar";; esac
+out19="$(STUB_CMUX_VERSION=0.64.22 bash "$DOCTOR" 2>&1)"
+case "$out19" in *"native agent state"*) bad "cmux 0.64.22 was credited with native agent state";;
+  *) ok "cmux 0.64.22 gets no native-data claim";; esac
+# 0.64.100 > 0.64.23 — numeric per component, not lexical.
+out20="$(STUB_CMUX_VERSION=0.64.100 bash "$DOCTOR" 2>&1)"
+case "$out20" in *"sidebar also reads cmux's native agent state"*) ok "0.64.100 compares as newer than 0.64.23";;
+  *) bad "0.64.100 was compared lexically";; esac
+# Without any bridge, a native-capable setup is NOT "working rows are off".
+mv "$HOME/.config/cmux-sentinel/cmux-bridge.sh" "$ROOT/amp-bridge.bak"
+out21="$(STUB_CMUX_VERSION=0.64.23 bash "$DOCTOR" 2>&1)"
+case "$out21" in *"no bridge installed — Working… still comes from cmux's native agent state"*) ok "bridge-less + native → informational, names what the bridge adds";;
+  *) bad "bridge-less native setup not explained";; esac
+case "$out21" in *"working/compacting rows are off"*) bad "bridge-less native setup still claims working rows are off";;
+  *) ok "no false 'rows are off' warning";; esac
+out22="$(STUB_CMUX_VERSION=0.64.22 bash "$DOCTOR" 2>&1)"
+case "$out22" in *"working/compacting rows are off"*) ok "bridge-less on an old cmux still warns";;
+  *) bad "bridge-less old cmux lost its warning";; esac
+mv "$ROOT/amp-bridge.bak" "$HOME/.config/cmux-sentinel/cmux-bridge.sh"
+
+echo "T15: group names come from the sidebar natively — no sync nag"
+G1='{"groups":[{"name":"Team","anchor_workspace_ref":"d1","is_collapsed":false,"member_workspace_refs":["d1"]}]}'
+out23="$(STUB_GROUPS="$G1" STUB_CMUX_VERSION=0.64.23 bash "$DOCTOR" 2>&1)"
+case "$out23" in *"sidebar shows group names natively (1 group(s), cmux v0.64.23)"*) ok "native group names reported";;
+  *) bad "native group names not reported";; esac
+case "$out23" in *"GROUP_NAME_SYNC is off"*|*"out of sync"*) bad "native group names still nagged about sync";;
+  *) ok "no sync nag when the sidebar reads names itself";; esac
+out24="$(STUB_GROUPS="$G1" STUB_CMUX_VERSION=0.64.23 GROUP_NAME_SYNC=1 bash "$DOCTOR" 2>&1)"
+case "$out24" in *"GROUP_NAME_SYNC=1 is redundant"*) ok "enabled sync is called redundant, not broken";;
+  *) bad "redundant sync not explained";; esac
+out25="$(STUB_GROUPS="$G1" STUB_CMUX_VERSION=0.64.22 bash "$DOCTOR" 2>&1)"
+case "$out25" in *"GROUP_NAME_SYNC is off"*) ok "old cmux keeps the sync advice";;
+  *) bad "old cmux lost its sync advice";; esac
+cp "$ROOT/old-sidebar.swift" "$HOME/.config/cmux/sidebars/workspaces.swift"
+out26="$(STUB_GROUPS="$G1" STUB_CMUX_VERSION=0.64.23 bash "$DOCTOR" 2>&1)"
+case "$out26" in *"GROUP_NAME_SYNC is off"*) ok "an old sidebar on a new cmux keeps the sync advice";;
+  *) bad "old sidebar was credited with native group names";; esac
+
+echo "T16: a key the meters CAN'T give back is a note, not a warning"
+# 9 keys, 8 real workspaces: some meter has to hold a key however the rows are
+# parked. Setup's best layout keeps ⌘9 real and hands ⌘8 to a meter; telling the user
+# to "re-park them" there is advice that can't work and a warning nobody can clear.
+printf 'USAGE_PROVIDERS="claude codex amp"\n' > "$HOME/.config/cmux/usage-sentinels.env"
+out27="$(STUB_WINB=eight-parked bash "$DOCTOR" 2>&1)"
+case "$out27" in *"are eating ⌘8 — unavoidable with 8 real workspace(s)"*) ok "8 reals, best layout → ⌘8 reported as unavoidable";;
+  *) bad "unavoidable ⌘8 not explained";; esac
+case "$out27" in *"re-park them"*) bad "told to re-park a layout that is already optimal";;
+  *) ok "no futile re-park advice";; esac
+# Same 8 reals with the meters at the very bottom: the COUNT is the same, but ⌘9 (the
+# "last workspace" key) sits on a meter and setup can move it — still a warning.
+out28="$(STUB_WINB=eight-last bash "$DOCTOR" 2>&1)"
+case "$out28" in *"are eating ⌘9 — re-park them"*) ok "⌘9 on a meter is still fixable drift";;
+  *) bad "fixable ⌘9 drift was downgraded";; esac
+# T9's grouped windows leave 8 and 6 NUMBERED reals, so their lost keys are unavoidable too.
+case "$out5$out6" in *"re-park them"*) bad "group-shifted meters with 8 numbered reals still told to re-park";;
+  *) ok "group-shifted meters with no spare real row are not nagged";; esac
 
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

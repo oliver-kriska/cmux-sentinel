@@ -64,12 +64,54 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   every interpreter-visible field and has no status among them: always `id`, `title`, `selected`,
   `pinned`, `index`, `directory`, `ports`+`portCount`, `unread`, `tabs`+`tabCount`; optional
   `description`, `color`, `branch`+`dirty`, `pr`+`prs`, `progress`, `latestMessage`, `latestPrompt`,
-  `latestAt`, `remote`. **Consequence: a cmux-native agent integration can never light up this
-  sidebar — per-agent title-marker bridges stay mandatory.** (`latestMessage`/`latestPrompt`/
+  `latestAt`, `remote`. ~~Consequence: a cmux-native agent integration can never light up this
+  sidebar — per-agent title-marker bridges stay mandatory.~~ (`latestMessage`/`latestPrompt`/
   `latestAt` are bindable and currently unused here.) Upstream issue
   `manaflow-ai/cmux#9001` tracks unifying this projection with the snapshot's missing `progress`
   (still OPEN, no maintainer response as of 2026-08-10; so is #9002 for a render diagnostic).
   Re-read on 0.64.22: the binding list above is **UNCHANGED** — nothing gained, nothing lost.
+  **SUPERSEDED on 0.64.23 (#10401): `w.agents[]` now carries native per-agent state** — `kind`,
+  `name`, `status` (`idle`|`working`|`needs_input`|`ended`), `lastActivityAt`, optional `sinceEpoch`,
+  `title`, `panelId`/`surfaceId`, `directory`, `pid`, `children[]` (subagents). It projects cmux's
+  hook-driven session registry, so it covers every agent cmux hooks (Claude, Amp, Codex, … — no
+  adapter of ours needed). Render-probed 2026-09-15: `\(w.agents[0].status)` → `working` on this
+  session's workspace, `amp|…` and `codex|ended` records present. `set-status` still has no binding;
+  `agents` is the replacement. Gaps that keep the bridge alive: **no compacting status** (⏳ has no
+  native source), stale `idle` records accumulate (24 = the cap on one workspace), and native
+  `needs_input` is WRONG for Claude (below). The snapshot RPC omits `agents` (same divergence as
+  `progress`). See `.claude/research/2026-09-15-cmux-0.64.23-release-check.md`.
+  **How the sidebar uses it (shipped 2026-09-15): native state is OR-ed with the title markers,
+  never instead of them.** `isWorking` = `⚡` marker OR any agent `status == "working"` whose
+  `lastActivityAt` is under 3600s old; `isWaiting` = `❓` marker OR any NON-Claude agent in
+  `needs_input`. Two rules, each learned: **(1) never trust native `needs_input` for
+  `kind == "claude"`.** cmux's reducer (`AgentChatSessionRegistry+Lifecycle.swift` `nextState`) maps
+  EVERY `notification` hook to `needsInput`, and Claude sends its idle "waiting for your input"
+  Notification ~61s after every `Stop` (measured in `~/.cmuxterm/events.jsonl`) — so every resting
+  Claude workspace would turn orange a minute after its turn. That is precisely the gate the bridge's
+  `_notify_waiting` exists for, and a passive "done" signal is what Oliver rejected. Other agents
+  (Codex, opencode, …) only hit `needs_input` on a real permission/question event. **(2) TTL the
+  native `working` the same way the bridge TTLs its markers** — the reducer has no reaper, so an agent
+  that never sends `Stop` stays `working` forever (the Amp plugin-host problem again). `clock.epoch -
+  lastActivityAt` is plain Int arithmetic and works. `⏳ compacting` stays bridge-only (the reducer
+  leaves the state unchanged on `preCompact`). `workLabel` shows `Working… ×N` when N>1 agents work in
+  one workspace — `children[]` subagents are deliberately not counted.
+- **TRAP: `!= nil` on an ARRAY field is always false — guard arrays with `.count > 0`.** Probed
+  2026-09-15: `w.agents != nil` → false (and `if w.agents != nil { … }` never renders) on a workspace
+  where `w.agents.count` is 2. `w.agents.count > 0` and `w.agents.filter { $0.status == "working" }.count`
+  work; on an absent array `.count > 0` is false. `!= nil` on a DICTIONARY field (`w.pr`, `w.progress`)
+  still works. This nearly produced a wrong "Swift can't see `agents`" note — the raw `\(w.agents)`
+  interpolation plus a known-set control is what caught it.
+- **TRAP: no mutation and no early exit from loops — use `.filter { … }.count`.** Probed 2026-09-15:
+  `var n = 0; for a in w.agents { n += 1 }` leaves `n == 0`, and `return` inside a `for` body does
+  not return from the function — both silently, `validate` passes. What DOES work: `.filter` closures
+  that CAPTURE outer values (`workspaces.filter { $0.index < w.index }` inside a per-row helper), a
+  `let` computed first and compared after (don't write `if x == arr.filter { … }.count - 1 {` — a
+  trailing closure inside an `if` condition is an ambiguity trap), and helper calls inside closures.
+  Every counter in the sidebar (`workingAgentCount`, `shortcutDigit`) is written that way.
+- **TRAP: a `.js` sidebar with our base name silently REPLACES ours.** 0.64.23 added a reactive JS
+  runtime (`~/.config/cmux/sidebars/<name>.js`), and for one base name `.js` wins over `.swift`, which
+  wins over `.json`. Upstream ships `Examples/CustomSidebars/workspaces.js` — our exact base name. The
+  JS context has no filesystem/network/timers, so sentinels stay the only meter data path either way.
 - **cmux SHIPPED a native workspace "status lane" concept in 0.64.22 — usable by hand, invisible to
   us.** `markWorkspaceDone` (⌘;) and `cycleWorkspaceStatus` (⌘⇧;, "cycle the workspace status one
   lane forward") are present at the **v0.64.22 tag** (verified by fetching
@@ -126,7 +168,7 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   `<anchor> |<detail>|<unicode bar>` so the fallback keeps the same label/detail-then-bar rhythm when
   `progress` is absent. The title's severity emoji (🟡/🔴) stays because title **color** still can't
   come from data.
-- **Workspace-GROUP data NEVER reaches the sidebar interpreter** (probed 2026-06-19, see
+- **Before 0.64.23, workspace-GROUP data NEVER reached the sidebar interpreter** (probed 2026-06-19, see
   `.claude/research/2026-06-19-workspace-group-names-in-sidebar.md`). There is no `groups` binding and
   no per-workspace group field — referencing `groups` renders empty (the interpreter is lenient, it
   does NOT blank), and `extension.sidebar.snapshot` carries no group fields either. A cmux group's
@@ -136,9 +178,18 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   as the meters: `bin/cmux-group-sync.sh` (opt-in `GROUP_NAME_SYNC=1`) renames each anchor's title to
   `group.name` via the **title channel** (preserving any ⚡/⏳ marker, writing only on change). Don't
   try to read group data in the sidebar — it isn't there.
+  **SUPERSEDED on 0.64.23 (#10401):** the shared data context now emits `groups`
+  (`{id, name, collapsed, pinned, anchorId, color?, icon?}`) and a grouped workspace carries `group`
+  (its group id). **Live-verified 2026-09-15 with a throwaway group** whose anchor TITLE was renamed
+  to something else via `workspace-action --action rename` (NOT `workspace-group rename`, which renames
+  the anchor title too and so can't tell the two paths apart): the anchor row rendered the GROUP name.
+  So the sidebar now reads it directly — `groupName(w)` (anchor → `groups[].name`) wins in
+  `displayTitle`, anchors get a `square.stack` glyph and no ⌘ digit — and `cmux-group-sync.sh` is only
+  needed for cmux < 0.64.23 (the doctor says so). On an older cmux `groups` is empty, every helper
+  falls through, and the sidebar behaves exactly as before.
 - **No modifier-key state reaches the interpreter — ⌘-hold hints are impossible.** The live
-  bindings are only `workspaces` / `tabs` / `workspaceCount` / `selectedTitle` / `selectedId` /
-  `unreadTotal` / `clock`; there's no keyboard/modifier binding (and no `@State`, no
+  bindings are only `workspaces` / `tabs` / `groups` (0.64.23+) / `workspaceCount` / `selectedTitle` /
+  `selectedId` / `unreadTotal` / `clock`; there's no keyboard/modifier binding (and no `@State`, no
   `.keyboardShortcut`). cmux's NATIVE sidebar does draw ⌘-hold digit badges
   (`modifierKeyMonitor.isModifierPressed`), but that's internal to it. Even given a binding, the
   ~1s re-eval would lag a held key. Needs an upstream feature — don't try to fake it.
@@ -174,8 +225,17 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   is a ⌘ key doing something odd. **Collapsing a group above the meters now spends that headroom the
   same way a close does.** So `bin/cmux-sentinel-doctor.sh` reports which digits (if any) the
   meters are eating and warns when headroom is down to one close; the fix is always "re-run setup".
+  **Except when there's nothing to fix:** with fewer than 9 NUMBERED real workspaces some meter
+  must hold a key (9 keys, 8 owners), and setup's best layout still loses ⌘8. The doctor reports
+  that as a NOTE ("unavoidable with N real workspace(s)") instead of a warning whose advice can't
+  work — but only when the eaten count is at that minimum AND ⌘9 is real (setup anchors ⌘9 with 2+
+  reals, so ⌘9 on a meter stays fixable drift). `tests/sentinel-doctor.sh` T16.
   Read-only, for the same reason it's not in the pollers. Both scripts keep an identical copy of the
   `JQ_NUMBERED` jq helper (setup parks by it, doctor reports drift off it) — change them together.
+  **The sidebar's `isNumbered`/`shortcutDigit` is the THIRD copy of that rule** (Swift, 0.64.23+ only,
+  since it needs the `groups` binding): anchor or member of a collapsed group → no digit, position =
+  numbered rows above it, ⌘9 = last numbered row. Before it, the gutter keyed on raw `w.index` and
+  drew wrong digits under any group. Live-verified expanded and collapsed with a throwaway group.
   The source is fetchable; `cmux docs shortcuts` names the raw URLs.
   See `.claude/research/2026-08-10-cmux-0.64.22-vacation-catchup.md`,
   `.claude/research/2026-07-15-workspace-shortcut-digits.md` and
@@ -218,8 +278,8 @@ make sidebar-live                     # mount repo sidebar against live data; hu
 
 # offline tests (stub cmux/security/curl/stat/$HOME — run in CI too)
 make test   # bridge-state(58) poller-gate(130) codex-poller(83) install-hooks(62) sentinel-setup(69)
-            # sentinel-doctor(49) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
-            # amp-bridge(43) amp-poller(49) entrypoint(33) formula(18) = 679 assertions total
+            # sentinel-doctor(71) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
+            # amp-bridge(43) amp-poller(61) entrypoint(33) formula(18) = 713 assertions total
 ```
 
 ## Architecture / where things live

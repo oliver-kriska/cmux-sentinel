@@ -3,8 +3,8 @@
 A one-screen field guide to the traps that cost real hours when building a cmux
 [custom sidebar](https://cmux.com/docs/custom-sidebars). The sidebar runs a
 **subset** of an interpreted SwiftUI-style language; the official docs tell you the
-API, this tells you what bites. Everything below is verified through **cmux 0.64.20**
-(re-check after upgrades — the interpreter and data model move fast).
+API, this tells you what bites. Everything below is verified through **cmux 0.64.20**, with the
+0.64.23 additions marked (re-check after upgrades — the interpreter and data model move fast).
 
 - Official authoring reference: `cmux docs sidebars` /
   <https://raw.githubusercontent.com/manaflow-ai/cmux/main/docs/custom-sidebars.md>
@@ -35,8 +35,20 @@ API, this tells you what bites. Everything below is verified through **cmux 0.64
   after workspace refs rotate, and exists before the next poll restores `progress`. Keep stable
   title prefixes for sentinel identity and a Unicode fallback for bootstrap/offline windows.
 - **`cmux set-status` does NOT reach custom sidebars.** It renders native-sidebar pills only; the
-  binding contract has no status field. Agent-state bridges therefore still need static title
-  markers (or another interpreter-visible field). Upstream issue
+  binding contract has no status field. Before 0.64.23, agent-state bridges therefore needed static
+  title markers (or another interpreter-visible field).
+- **0.64.23: `w.agents[]` carries cmux's native per-agent state** (`kind`, `status`
+  `idle|working|needs_input|ended`, `lastActivityAt` epoch, …) for every agent cmux hooks. Two
+  caveats: Claude's idle "waiting for input" notification (~60s after each finished turn) puts a
+  Claude record in `needs_input`, so don't treat that as "asking" for `kind == "claude"`; and nothing
+  reaps a `working` record whose agent never sent Stop — compare `clock.epoch - lastActivityAt`
+  against a TTL. There is no compacting status.
+- **0.64.23: `groups` (`id`, `name`, `collapsed`, `pinned`, `anchorId`, …) and `w.group`.** A group's
+  header row is its anchor workspace (`anchorId == w.id`); its name lives only on the group. Group
+  anchors and collapsed members take no ⌘N digit (0.64.22+), so a gutter digit computed from
+  `w.index` is wrong under any group.
+- **0.64.23: a `<name>.js` sidebar beats `<name>.swift`** (which beats `.json`) for the same base
+  name, silently. cmux's own example is `Examples/CustomSidebars/workspaces.js`. Upstream issue
   [#9001](https://github.com/manaflow-ai/cmux/issues/9001) tracks this projection drift together with
   the snapshot's missing `progress`.
 - **`cmux sidebar-state` and `extension.sidebar.snapshot` are data snapshots, not render probes.**
@@ -64,6 +76,13 @@ API, this tells you what bites. Everything below is verified through **cmux 0.64
   short-circuits.
 - **Top-level `let` referencing `workspaces`/`clock` fails.** Those exist only inside
   the view builder; keep `let` bindings inside the `VStack` body.
+- **`array != nil` is always false**, even on a populated array — `if w.agents != nil { … }` never
+  renders. Guard arrays with `.count > 0`. (`!= nil` on a dictionary like `w.pr` works.)
+- **No mutation, no early exit from loops.** `var n = 0; for x in xs { n += 1 }` leaves `n == 0`, and
+  `return` inside a `for` doesn't leave the function — silently, and `validate` passes. Count with
+  `.filter { … }.count`; its closures DO capture outer values (`workspaces.filter { $0.index <
+  w.index }`). Compute into a `let` before comparing rather than putting a trailing closure inside an
+  `if` condition.
 
 ## Greedy modifiers that wreck layout
 

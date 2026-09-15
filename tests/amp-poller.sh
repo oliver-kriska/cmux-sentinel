@@ -167,6 +167,47 @@ out=$(AMP_FIXTURE="$DECIMAL" run --print)
 has "decimal remaining rounds"      "$out" "ampu: 0% used"
 has "decimal orb rounds to 100 used" "$out" "ampo: 100% used"
 
+echo "amp-poller: the 2026-09 reworded shape (number AFTER the phrase)"
+
+# Byte-for-byte the shape amp 0.0.1789… prints (email/workspace replaced). The old
+# parser read NOTHING from this — every Amp meter sat on "⚠ no data" for two weeks.
+# shellcheck disable=SC2016
+CURRENT='Signed in as user@example.com (someone)
+**Amp Megawatt Tier:** agent usage $5.27 of $20 remaining (26%), orb usage 288.8h of 750h a1.small orb hours remaining (39%) - period 2026-08-20 to 2026-09-20, resets upon renewal in 5 days
+**Workspace demo:** $49.96 remaining (set up auto-reload to avoid running out) - https://ampcode.com/workspaces/demo
+
+# Run `amp usage --details` for more detailed information.'
+out=$(AMP_FIXTURE="$CURRENT" run --print); rc=$?
+is  "current shape parses (exit 0)"      "$rc" "0"
+has "agent usage 26% remaining → 74% used" "$out" "ampu: 74% used (26% remaining)"
+has "orb usage 39% remaining → 61% used"   "$out" "ampo: 61% used (39% remaining)"
+has "current shape keeps amp's reset phrase" "$out" "resets in 5 days"
+hasnt "workspace \$ balance is never metered" "$out" "49"
+
+reset_logs
+AMP_FIXTURE="$CURRENT" run --update >/dev/null
+has "current shape paints a compact title" "$(cat "$ROOT/.renames")" "ampu |74% (5d) 🟡|"
+is  "current shape progress fraction"      "$(head -1 "$ROOT/.progress" | cut -d' ' -f1)" "0.74"
+
+out=$(AMP_FIXTURE="$CURRENT" run_out --buckets)
+is  "current shape buckets = ampu" "$out" "ampu"
+
+# An agent clause with NO percentage must not reach across into the orb clause and
+# steal its number — that would paint the orb allowance on the agent meter.
+# shellcheck disable=SC2016
+NOAGENTPCT='**Amp X Tier:** agent usage $5 of $20 remaining, orb usage 10h of 750h orb hours remaining (39%) - resets upon renewal in 5 days'
+out=$(AMP_FIXTURE="$NOAGENTPCT" run --print)
+has "agent clause cannot steal the orb percentage" "$out" "ampu: n/a"
+has "orb still parses on its own"                  "$out" "ampo: 61% used"
+
+# The inversion is only safe on a REMAINING number. If Amp ever flips to "used",
+# we must go offline rather than invert it into the opposite bar.
+# shellcheck disable=SC2016
+USEDPCT='**Amp X Tier:** agent usage $15 of $20 used (74%) - resets upon renewal in 5 days'
+out=$(AMP_FIXTURE="$USEDPCT" run --print); rc=$?
+is  "a 'used (N%)' shape is not parsed" "$rc" "1"
+hasnt "a 'used (N%)' shape is never inverted" "$out" "26% used"
+
 echo "amp-poller: unparseable → offline, never a fake 0%"
 
 # shellcheck disable=SC2016
