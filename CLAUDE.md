@@ -718,7 +718,10 @@ badge from the current release;
 **(3)** `make notes` (in `check`/`ci`, and a lefthook pre-commit on `VERSION`/`CHANGELOG.md`) fails a
 version bump whose CHANGELOG section doesn't exist yet, because after the tag is pushed it's too
 late. The workflow refreshes an existing Release without touching its title, so a hand-written
-title survives. `tests/release-notes.sh` covers all of this; its decoy heading sits ABOVE the real
+title survives. **It checks out its OWN ref, never the dispatched tag**: tags older than the workflow
+have no `scripts/release-notes.sh`, so a backfill runs main's script and CHANGELOG, and reads the
+tag's `VERSION` with `git show refs/tags/<tag>:VERSION`. (The first draft checked out the tag, which
+would have failed every backfill it was written for.) `tests/release-notes.sh` covers all of this; its decoy heading sits ABOVE the real
 one on purpose — below it, the dot-escape assertion passed even with the escaping removed
 (mutation-tested).
 
