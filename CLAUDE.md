@@ -700,9 +700,14 @@ Four things about it are non-obvious and each is a silent failure if you get it 
   Homebrew 7, found 2026-09-16 while upgrading to 0.2.3: the upgrade printed the full caveats block,
   and `FormulaInstaller#caveats` gates only on `only_deps?` / `installed_on_request?` / `quiet?`,
   never on first-install. Meanwhile `post_install` became `odeprecated` in favour of
-  `post_install_steps`, a declarative file-operation DSL (`mkdir_p`, `symlink`, cache updates) with
-  no verb that can print. A deprecation turns into `odisabled` — a hard error — so keeping it would
-  eventually break `brew install` for everyone, to print a line the caveats already print.
+  `post_install_steps`, a declarative DSL of file operations plus `warn` and `run`. (An earlier
+  version of this note said it had no verb that prints or runs anything. `install_steps.rb` shows
+  both.) Neither helps: caveats already print the line, and since Homebrew 5.1.15 the post-install
+  phase runs in a write sandbox with `HOME` set to a temp dir, so a `run` of `cmux-sentinel deploy`
+  could not reach `~/bin` anyway. That same fake `HOME` is why scribe's
+  `cron install --if-installed` hook had silently done nothing for months. A deprecation turns into
+  `odisabled`, a hard error, so keeping `post_install` would eventually break `brew install` for
+  everyone.
   `scripts/make-formula.sh` renders no `post_install`; check Homebrew source before bringing one back.
 
 **GitHub Releases are published by CI, not by hand** (`.github/workflows/release.yml`, on every

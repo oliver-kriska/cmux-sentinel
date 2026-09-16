@@ -102,8 +102,9 @@ cmux-sentinel deploy          # runs the tree's own install.sh: files, hooks, ag
 the scripts in `~/bin` — new code installed, nothing changed, no error. That is why:
 
 - the "run deploy" line lives in the formula's `caveats`, which Homebrew prints on upgrade as well
-  as on first install. There is no `post_install`: Homebrew 7 deprecates it, and its replacement
-  (`post_install_steps`) only performs file operations and cannot print a message;
+  as on first install. There is no `post_install`: Homebrew 7 deprecates it, and since Homebrew
+  5.1.15 the whole post-install phase runs sandboxed with `HOME` set to a temp dir. So neither it
+  nor its replacement's `run` step (`post_install_steps`) could run `deploy` into your `~/bin`;
 - `cmux-sentinel update` **refuses** on a Homebrew-managed copy and names `brew upgrade` instead —
   curl-installing over a brew install leaves two updaters fighting over `~/bin`, with brew still
   reporting a version it no longer controls;

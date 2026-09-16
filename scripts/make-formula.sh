@@ -95,7 +95,8 @@ class CmuxSentinel < Formula
   # brew replaces the Cellar copy while launchd keeps running the scripts in ~/bin.
   # FormulaInstaller#caveats gates only on only_deps?/installed_on_request?/quiet?,
   # never on first-install. There is deliberately no post_install: Homebrew 7
-  # deprecates it for post_install_steps, a file-operation DSL that cannot print.
+  # deprecates it, and post-install runs sandboxed with a temp HOME, so neither it
+  # nor a post_install_steps run step could deploy into ~/bin for the user.
   def caveats
     <<~EOS
       Homebrew installed the files; two commands finish the job:
