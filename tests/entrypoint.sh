@@ -156,5 +156,84 @@ if [ "$rc" != 0 ]; then ok "brew-managed update is refused"; else bad "brew-mana
 if has "$out" "brew upgrade cmux-sentinel"; then ok "names the Homebrew update path"; else bad "did not name brew upgrade: $out"; fi
 if has "$out" "cmux-sentinel deploy"; then ok "reminds that brew alone changes nothing running"; else bad "no deploy reminder: $out"; fi
 
+echo "T11: same version does NOT mean same files — the payload fingerprint says so"
+# The gap this closes: a checkout ahead of the last tag deploys newer code under
+# the released version, so both copies read the same string while differing. The
+# version comparison in T9 is blind to it by construction.
+mktree() { # $1 = tree root  $2 = version  $3 = extra bytes in a payload file
+  mkdir -p "$1/bin" "$1/hooks" "$1/sidebars"
+  printf '%s\n' "$2" > "$1/VERSION"
+  printf '#!/bin/bash\necho "RAN:install.sh $*"\nexit 7\n' > "$1/install.sh"
+  chmod +x "$1/install.sh"
+  printf '#!/bin/bash\n# %s\n' "$3" > "$1/bin/cmux-claude-usage.sh"
+  cp "$ENTRY" "$1/bin/cmux-sentinel"; chmod +x "$1/bin/cmux-sentinel"
+}
+TD="$ROOT/drift"; mktree "$TD" 0.3.0 original
+# Borrow the dispatcher's own hasher, which also proves it is self-contained.
+eval "$(sed -n '/^payload_hash()/,/^}/p' "$ENTRY")"
+real="$(payload_hash "$TD")"
+if [ -n "$real" ]; then ok "payload_hash fingerprints a tree"; else bad "payload_hash produced nothing"; fi
+
+printf 'version=0.3.0\ninstalled=2026-09-16\ncommit=abc1234\npayload=%s\n' "$real" \
+  > "$HOME/.config/cmux-sentinel/VERSION"
+out="$("$TD/bin/cmux-sentinel" version 2>&1)"
+if has "$out" "DIFFERENT files"; then bad "warned when the payloads match: $out"; else ok "matching payloads stay quiet"; fi
+
+# Now the real-world case: same version, different bytes.
+printf 'version=0.3.0\ninstalled=2026-09-16\ncommit=abc1234\npayload=000000000000\n' \
+  > "$HOME/.config/cmux-sentinel/VERSION"
+out="$("$TD/bin/cmux-sentinel" version 2>&1)"
+if has "$out" "DIFFERENT files"; then ok "drift at an equal version is reported"; else bad "silent about content drift: $out"; fi
+if has "$out" "$real"; then ok "names this tree's fingerprint"; else bad "did not name the tree payload: $out"; fi
+if has "$out" "000000000000"; then ok "names the deployed fingerprint"; else bad "did not name the deployed payload: $out"; fi
+
+# Fail OPEN: a stamp from before this feature has no payload line and must not
+# grow a warning, or every existing install reports drift it cannot act on.
+printf 'version=0.3.0\ninstalled=2026-09-16\ncommit=abc1234\n' > "$HOME/.config/cmux-sentinel/VERSION"
+out="$("$TD/bin/cmux-sentinel" version 2>&1)"
+if has "$out" "DIFFERENT files"; then bad "an old stamp with no payload warned: $out"; else ok "a payload-less stamp stays quiet"; fi
+
+echo "T12: deploy refuses to go BACKWARDS"
+# deploy copies tree -> ~/bin and assumes the tree is at least as new. When a
+# checkout is ahead of the tag that is false, and a plain deploy silently
+# reinstates the released pollers under launchd.
+OLDT="$ROOT/oldtree"; mktree "$OLDT" 0.1.0 original
+printf 'version=0.3.0\ninstalled=2026-09-16\ncommit=abc1234\npayload=%s\n' "$real" \
+  > "$HOME/.config/cmux-sentinel/VERSION"
+out="$("$OLDT/bin/cmux-sentinel" deploy 2>&1)"; rc=$?
+if [ "$rc" != 0 ]; then ok "an older tree is refused"; else bad "deployed backwards silently"; fi
+if has "$out" "BACKWARDS"; then ok "says it would go backwards"; else bad "unclear refusal: $out"; fi
+if has "$out" "0.1.0" && has "$out" "0.3.0"; then ok "names both versions"; else bad "did not name both versions: $out"; fi
+if has "$out" "RAN:install.sh"; then bad "reached install.sh despite refusing"; else ok "install.sh never ran"; fi
+# --force is the escape hatch, and must NOT leak into install.sh's parser, which
+# rejects unknown options with exit 2.
+out="$("$OLDT/bin/cmux-sentinel" deploy --force 2>&1)"; rc=$?
+if has "$out" "RAN:install.sh"; then ok "--force deploys anyway"; else bad "--force did not deploy: $out"; fi
+if has "$out" "RAN:install.sh --force"; then bad "--force leaked into install.sh's args"; else ok "--force is consumed by the dispatcher"; fi
+if [ "$rc" = 7 ]; then ok "the installer's exit status still survives"; else bad "status rewritten to $rc"; fi
+# A NEWER tree is the normal `brew upgrade && deploy` path and must not be blocked.
+NEWT="$ROOT/newtree"; mktree "$NEWT" 0.9.0 original
+out="$("$NEWT/bin/cmux-sentinel" deploy 2>&1)"
+if has "$out" "RAN:install.sh"; then ok "a newer tree deploys normally"; else bad "blocked a real upgrade: $out"; fi
+
+echo "T13: deploy refuses an equal-version tree whose CONTENT differs"
+# The case version numbers cannot see, and the one that actually bit: Cellar and
+# ~/bin both v0.2.2, Cellar older. Proceeding would regress what launchd runs.
+SAMET="$ROOT/sametree"; mktree "$SAMET" 0.3.0 CHANGED
+printf 'version=0.3.0\ninstalled=2026-09-16\ncommit=abc1234\npayload=%s\n' "$real" \
+  > "$HOME/.config/cmux-sentinel/VERSION"
+out="$("$SAMET/bin/cmux-sentinel" deploy 2>&1)"; rc=$?
+if [ "$rc" != 0 ]; then ok "equal-version content drift is refused"; else bad "deployed over a differing tree silently"; fi
+if has "$out" "files differ"; then ok "says the files differ"; else bad "unclear refusal: $out"; fi
+if has "$out" "--force"; then ok "offers the override"; else bad "no override named: $out"; fi
+out="$("$SAMET/bin/cmux-sentinel" deploy --force 2>&1)"
+if has "$out" "RAN:install.sh"; then ok "--force deploys the differing tree"; else bad "--force did not deploy: $out"; fi
+# Identical bytes at the same version is a harmless re-deploy, not a refusal.
+IDENT="$ROOT/ident"; mktree "$IDENT" 0.3.0 original
+printf 'version=0.3.0\ninstalled=2026-09-16\ncommit=abc1234\npayload=%s\n' "$(payload_hash "$IDENT")" \
+  > "$HOME/.config/cmux-sentinel/VERSION"
+out="$("$IDENT/bin/cmux-sentinel" deploy 2>&1)"
+if has "$out" "RAN:install.sh"; then ok "an identical re-deploy proceeds"; else bad "blocked a harmless re-deploy: $out"; fi
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

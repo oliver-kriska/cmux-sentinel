@@ -80,6 +80,13 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   native source), stale `idle` records accumulate (24 = the cap on one workspace), and native
   `needs_input` is WRONG for Claude (below). The snapshot RPC omits `agents` (same divergence as
   `progress`). See `.claude/research/2026-09-15-cmux-0.64.23-release-check.md`.
+  Re-read on **0.64.24**: `docs/custom-sidebars.md`, `docs/events.md` and `web/data/cmux-shortcuts.ts`
+  are **byte-identical to v0.64.23**, and the projection path behind `agents`/`groups`
+  (`Workspace+CustomSidebarSnapshot.swift`, `CustomSidebarDataContextBuilder.swift`,
+  `AgentChatSessionRegistry*`) plus the ⌘N numbering source (`WorkspaceShortcutMapper`,
+  `SidebarWorkspaceRenderItem`, `TabManager.selectWorkspaceByNumber`) are **untouched** in the
+  v0.64.23…v0.64.24 diff — so no render probe was needed. 0.64.24 is a 20-PR patch release
+  (Cloud/iOS/IROH/browser/Computer-Use). See `.claude/research/2026-09-16-cmux-0.64.24-release-check.md`.
   **How the sidebar uses it (shipped 2026-09-15): native state is OR-ed with the title markers,
   never instead of them.** `isWorking` = `⚡` marker OR any agent `status == "working"` whose
   `lastActivityAt` is under 3600s old; `isWaiting` = `❓` marker OR any NON-Claude agent in
@@ -278,8 +285,8 @@ make sidebar-live                     # mount repo sidebar against live data; hu
 
 # offline tests (stub cmux/security/curl/stat/$HOME — run in CI too)
 make test   # bridge-state(58) poller-gate(130) codex-poller(83) install-hooks(62) sentinel-setup(69)
-            # sentinel-doctor(71) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
-            # amp-bridge(43) amp-poller(61) entrypoint(33) formula(18) = 713 assertions total
+            # sentinel-doctor(75) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
+            # amp-bridge(43) amp-poller(61) entrypoint(52) formula(18) = 736 assertions total
 ```
 
 ## Architecture / where things live
@@ -663,6 +670,27 @@ Four things about it are non-obvious and each is a silent failure if you get it 
 - **`cmux-sentinel version` reports BOTH numbers on a brew install** — the deployed stamp (what
   launchd runs) and the Cellar version (what you just typed) — and warns when they differ. Print
   one and "I upgraded" / "it's still broken" are both true with no way to see it.
+- **…but equal version numbers do NOT mean equal files — so the stamp also carries a `payload=`
+  fingerprint.** Found 2026-09-16: the repo was two commits past `v0.2.2` and deployed to `~/bin`, the
+  Cellar still held the tagged `0.2.2`, and `cmux-sentinel version` said nothing because both read
+  `0.2.2`. Meanwhile `cmux-sentinel doctor` ran the CELLAR doctor, which predated the T16 fix, and
+  told Oliver to re-park meters that were already optimally parked. `payload_hash()` fingerprints
+  `VERSION`, `install.sh`, `bin/*.sh`, `hooks/*` and the sidebar. `install.sh` stamps it, `version`
+  compares it against the tree it is running from, and `deploy` REFUSES two cases it can prove are
+  not an upgrade: an older tree version, and a same-version tree whose fingerprint differs (both
+  refusals name `--force`, which the dispatcher consumes, because `install.sh` exits 2 on an unknown
+  option). Everything uncertain proceeds — no hasher, no stamp, or a pre-0.2.3 stamp with no
+  `payload=` line — because a deploy that won't run is worse than one that re-copies the same bytes.
+  The doctor separately notes when `$0` differs from `~/bin/cmux-sentinel-doctor.sh` (a note, not a
+  warning: running from a checkout is normal in development). `payload_hash` is duplicated
+  VERBATIM in `install.sh` and `bin/cmux-sentinel` — the dispatcher can't source the installer, since
+  Homebrew stages them in different trees — so change them together, like `JQ_NUMBERED`.
+  **TRAP inside it: test each path and end the subshell on `true`.** The first version ran
+  `cat ./bin/*.sh ./hooks/* …`; on a tree with an empty `hooks/` the glob stayed literal, `cat`
+  failed, and under `pipefail` the `cur="$(payload_hash …)"` assignment went false, so `version`'s
+  `&&` chain silently skipped the check — indistinguishable from "no drift". `deploy`'s tests passed
+  anyway because it assigns standalone; only `tests/entrypoint.sh` T11 caught it.
+  Covered by `tests/entrypoint.sh` T11–T13 and `tests/sentinel-doctor.sh` T17.
 - **The "now run deploy" message goes in `post_install`, not `caveats`.** Homebrew prints `caveats`
   only on the FIRST install — and the upgrade is exactly when the message matters.
 

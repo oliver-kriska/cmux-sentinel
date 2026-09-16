@@ -309,6 +309,33 @@ if [ "${WITH_AMP:-0}" = "1" ] || [ -f "$HOME/.config/amp/plugins/cmux-sentinel-a
   AMP_INSTALLED=1
 fi
 
+# ── payload fingerprint ───────────────────────────────────────────────────────
+# A version STRING is not a content hash. Between a release and the next tag the
+# VERSION file does not move while the files do, so comparing versions alone
+# answers "same" for two trees that differ — which is how a Homebrew Cellar copy
+# ends up running older code than ~/bin with nothing able to report it. Stamp the
+# content at install time so a later check can see the drift the number hides.
+#
+# Duplicated VERBATIM in bin/cmux-sentinel — the dispatcher cannot source this
+# file (Homebrew stages them in different trees). Change the two together.
+payload_hash() { # $1 = source tree root; prints a short digest, or nothing
+  local t="$1" sum=""
+  [ -f "$t/VERSION" ] || return 1
+  if command -v shasum >/dev/null 2>&1; then sum="shasum -a 256"
+  elif command -v sha256sum >/dev/null 2>&1; then sum="sha256sum"
+  else return 1; fi   # no hasher: fail OPEN and let the caller skip the check
+  # Fixed order, and an UNMATCHED glob must not poison the exit status: a tree
+  # with no hooks/ makes `cat` fail, and under `pipefail` that turns the whole
+  # assignment false — silently skipping the check that called this, which reads
+  # exactly like "no drift". Test each path and end the subshell on a true.
+  ( cd "$t" 2>/dev/null || exit 1
+    for f in ./VERSION ./install.sh ./bin/*.sh ./hooks/* ./sidebars/*.swift; do
+      [ -f "$f" ] && cat "$f"
+    done
+    true
+  ) | $sum 2>/dev/null | cut -c1-12
+}
+
 # ── version stamp ─────────────────────────────────────────────────────────────
 # Record WHAT was installed, so "is the fix in my copy?" is answerable without
 # asking the maintainer. The git sha is best-effort: the curl bootstrap installs
@@ -324,8 +351,9 @@ if [ -f "$here/VERSION" ]; then
   if [ "$(git -C "$here" rev-parse --show-toplevel 2>/dev/null)" = "$here" ]; then
     _sha="$(git -C "$here" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   fi
-  printf 'version=%s\ninstalled=%s\ncommit=%s\n' \
-    "$(cat "$here/VERSION")" "$(date +%Y-%m-%d)" "$_sha" \
+  _payload="$(payload_hash "$here" 2>/dev/null)" || _payload=""
+  printf 'version=%s\ninstalled=%s\ncommit=%s\npayload=%s\n' \
+    "$(cat "$here/VERSION")" "$(date +%Y-%m-%d)" "$_sha" "$_payload" \
     > "$HOME/.config/cmux-sentinel/VERSION"
   echo "  -> ~/.config/cmux-sentinel/VERSION  (v$(cat "$here/VERSION"), $_sha)"
 fi

@@ -72,6 +72,17 @@ else
   note "no version stamp — installed before v0.2.0, or copied by hand; re-run install.sh to record one"
 fi
 
+# The doctor you TYPED is not always the doctor you INSTALLED. `cmux-sentinel` on
+# PATH can be a Homebrew wrapper into the Cellar, which holds the last RELEASE
+# while ~/bin holds whatever was deployed last — and a checkout ahead of the tag
+# makes those differ under the same version number. Findings then come from code
+# this machine is not running, which is how a warning survives its own fix.
+# A note, not a warning: running from a checkout is normal during development.
+if [ -f "$HOME/bin/cmux-sentinel-doctor.sh" ] && [ "$HERE" != "$HOME/bin" ] \
+   && ! cmp -s "$0" "$HOME/bin/cmux-sentinel-doctor.sh"; then
+  note "this doctor is $0, which DIFFERS from the installed ~/bin copy — findings describe this file, not what runs"
+fi
+
 # cmux ≥ 0.64.23 binds `workspaces[i].agents` (native agent state) and `groups`
 # into the sidebar. Both are feature-gated on the VERSION because the interpreter
 # can't be asked: an unset binding renders exactly like an absent one. An

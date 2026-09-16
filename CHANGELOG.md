@@ -13,6 +13,12 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
 
 ### Added
 
+- **`cmux-sentinel version` notices when two copies share a version number but not their files.**
+  A Homebrew install keeps the released tree in the Cellar while `~/bin` holds what launchd
+  actually runs, and a checkout sitting ahead of the last tag deploys newer code under the *old*
+  version string — so both copies read e.g. `0.2.2` while differing, and the version comparison
+  could never see it. The installer now records a fingerprint of what it deployed, and `version`
+  reports drift against the tree you are running from.
 - **Working rows for every agent cmux knows, no bridge required (cmux ≥ 0.64.23).** cmux now hands
   custom sidebars its own per-agent state, so Codex, opencode, Amp and Claude sessions show
   `Working…` even without `--with-bridge` — and `Working… ×2` when two agents work in one
@@ -29,6 +35,11 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
 
 ### Fixed
 
+- **`cmux-sentinel deploy` could silently downgrade what launchd runs.** `deploy` copies the tree
+  next to it into `~/bin`, which assumes that tree is at least as new as the installed copy — false
+  whenever a checkout is ahead of the last tag, and the symptom is the old pollers quietly running
+  again. It now refuses a tree that is an older version, and refuses a same-version tree whose
+  files differ, naming both fingerprints; `--force` deploys anyway.
 - **Amp meters went `⚠ no data` after Amp reworded `amp usage`** (`agent usage $5.27 of $20
   remaining (26%)`, where it used to print `74% other usage … remaining`). Both wordings parse; a
   percentage that isn't explicitly *remaining* is still refused rather than guessed.

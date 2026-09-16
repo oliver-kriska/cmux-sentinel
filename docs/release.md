@@ -15,9 +15,11 @@ git commit -am "Release 0.3.0"
 git push
 ```
 
-`install.sh` stamps `VERSION` (plus the install date and short commit) into
-`~/.config/cmux-sentinel/VERSION`. `cmux-sentinel version` reads it back and the doctor header
-compares it with the `VERSION` published on `main`, so "am I on the fixed one?" is self-serve.
+`install.sh` stamps `VERSION` (plus the install date, short commit and a fingerprint of the files it
+deployed) into `~/.config/cmux-sentinel/VERSION`. `cmux-sentinel version` reads it back and the
+doctor header compares it with the `VERSION` published on `main`, so "am I on the fixed one?" is
+self-serve. The fingerprint matters between releases: a checkout ahead of the last tag deploys newer
+files under the *same* version number, and only the fingerprint can tell those two copies apart.
 
 ## 2. Tag it
 
@@ -62,7 +64,7 @@ Then verify against a real Homebrew, not just by reading:
 brew update && brew upgrade cmux-sentinel        # or: brew tap oliver-kriska/tap && brew install …
 brew test cmux-sentinel                          # runs the formula's test block
 brew audit --strict --online oliver-kriska/tap/cmux-sentinel
-cmux-sentinel version                            # brew version AND deployed stamp; warns if they differ
+cmux-sentinel version                            # brew version, deployed stamp, and file drift
 ```
 
 ## What Homebrew does and does not do
@@ -86,6 +88,11 @@ the scripts in `~/bin` — new code installed, nothing changed, no error. That i
 - `cmux-sentinel update` **refuses** on a Homebrew-managed copy and names `brew upgrade` instead —
   curl-installing over a brew install leaves two updaters fighting over `~/bin`, with brew still
   reporting a version it no longer controls;
+- `cmux-sentinel deploy` **refuses to go backwards.** It copies the tree beside it into `~/bin`,
+  which is only an upgrade if that tree is at least as new. When `~/bin` was deployed from a
+  checkout ahead of the tag, the Cellar is *older* while reading the same version — so `deploy`
+  refuses an older tree version, and a same-version tree whose fingerprint differs. `--force`
+  deploys anyway. Cutting a release is what makes the Cellar current again;
 - the generated plists keep pointing at `~/bin/*.sh`. A Cellar path carries the version, so an
   upgrade would break every loaded agent — and launchd holds its loaded definition, so it would
   break silently.

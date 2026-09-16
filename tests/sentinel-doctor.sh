@@ -435,5 +435,29 @@ case "$out28" in *"are eating ⌘9 — re-park them"*) ok "⌘9 on a meter is st
 case "$out5$out6" in *"re-park them"*) bad "group-shifted meters with 8 numbered reals still told to re-park";;
   *) ok "group-shifted meters with no spare real row are not nagged";; esac
 
+echo "T17: the doctor says when it is not the copy this machine runs"
+# The failure this closes: `cmux-sentinel` on PATH can be a Homebrew wrapper into
+# the Cellar (the last RELEASE) while ~/bin holds a newer deployed copy. The
+# Cellar doctor then reports findings its own fix already removed — which is
+# exactly how a warning outlives the code that stopped emitting it.
+mkdir -p "$HOME/bin"
+printf '#!/bin/bash\n# a DIFFERENT doctor\n' > "$HOME/bin/cmux-sentinel-doctor.sh"
+out17="$(bash "$DOCTOR" 2>&1)"
+case "$out17" in *"DIFFERS from the installed"*) ok "a doctor unlike the installed copy says so";;
+  *) bad "silent about running a different doctor than is installed";; esac
+case "$out17" in *"not what runs"*) ok "says its findings describe this file";;
+  *) bad "did not explain why that matters";; esac
+# Identical bytes are the normal case and must stay quiet, or every ~/bin install
+# grows a permanent note about itself.
+cp "$DOCTOR" "$HOME/bin/cmux-sentinel-doctor.sh"
+out17b="$(bash "$DOCTOR" 2>&1)"
+case "$out17b" in *"DIFFERS from the installed"*) bad "warned when the two copies are identical";;
+  *) ok "an identical installed copy stays quiet";; esac
+# No installed copy at all (a fresh checkout) is not a drift condition.
+rm -f "$HOME/bin/cmux-sentinel-doctor.sh"
+out17c="$(bash "$DOCTOR" 2>&1)"
+case "$out17c" in *"DIFFERS from the installed"*) bad "warned with nothing installed to differ from";;
+  *) ok "no installed copy means no note";; esac
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

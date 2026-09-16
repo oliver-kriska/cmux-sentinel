@@ -31,6 +31,42 @@ brew_owned() { case "$HERE" in */Cellar/cmux-sentinel/*) return 0 ;; *) return 1
 
 die() { echo "cmux-sentinel: $*" >&2; exit 1; }
 
+# A version STRING is not a content hash. Between a release and the next tag the
+# VERSION file does not move while the files do, so comparing versions alone
+# answers "same" for two trees that differ — which is how the Cellar copy ends up
+# running older code than ~/bin with nothing able to report it.
+#
+# Duplicated VERBATIM in install.sh (which writes the stamp); the dispatcher
+# cannot source it, because Homebrew stages them in different trees. Change both.
+payload_hash() { # $1 = source tree root; prints a short digest, or nothing
+  local t="$1" sum=""
+  [ -f "$t/VERSION" ] || return 1
+  if command -v shasum >/dev/null 2>&1; then sum="shasum -a 256"
+  elif command -v sha256sum >/dev/null 2>&1; then sum="sha256sum"
+  else return 1; fi   # no hasher: fail OPEN and let the caller skip the check
+  # Fixed order, and an UNMATCHED glob must not poison the exit status: a tree
+  # with no hooks/ makes `cat` fail, and under `pipefail` that turns the whole
+  # assignment false — silently skipping the check that called this, which reads
+  # exactly like "no drift". Test each path and end the subshell on a true.
+  ( cd "$t" 2>/dev/null || exit 1
+    for f in ./VERSION ./install.sh ./bin/*.sh ./hooks/* ./sidebars/*.swift; do
+      [ -f "$f" ] && cat "$f"
+    done
+    true
+  ) | $sum 2>/dev/null | cut -c1-12
+}
+
+# Numeric per component, so 0.10.0 > 0.9.0 — a string compare gets that backwards.
+ver_lt() { # is $1 strictly older than $2?
+  [ "$1" != "$2" ] || return 1
+  [ "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" = "$1" ]
+}
+
+stamp_field() { # $1 = field name
+  [ -f "$HOME/.config/cmux-sentinel/VERSION" ] || return 1
+  sed -n "s/^$1=//p" "$HOME/.config/cmux-sentinel/VERSION"
+}
+
 # Find a helper script by name, or fail with the paths actually searched — a
 # "command not found" that doesn't say where it looked is a support ticket.
 resolve() { # $1 = script filename
@@ -92,6 +128,17 @@ show_version() {
       echo "  ⚠ ~/bin is still $stamped — run 'cmux-sentinel deploy' to put $cver there"
     fi
   fi
+  # Equal version numbers do NOT mean equal files. A checkout sitting ahead of the
+  # last tag deploys newer code under the released version, so the two copies read
+  # the same string while differing — the one case the comparison above cannot see.
+  local tree cur was
+  was="$(stamp_field payload 2>/dev/null)"
+  if [ -n "$was" ] && tree="$(resolve_tree)" && cur="$(payload_hash "$tree" 2>/dev/null)" \
+     && [ -n "$cur" ] && [ "$cur" != "$was" ]; then
+    echo "  ⚠ same version, DIFFERENT files: deployed payload $was, this tree $cur"
+    echo "    this tree: $tree"
+    echo "    'cmux-sentinel deploy' would overwrite ~/bin with this tree's copy."
+  fi
   return 0
 }
 
@@ -138,7 +185,35 @@ case "$cmd" in
     # them by absolute path, so "upgraded" without this step means new code sitting
     # in the Cellar while launchd keeps running the old copy — invisibly.
     t="$(resolve_tree)" || die "no source tree beside this script (looked in: ${TREES[*]}). Use \`cmux-sentinel update\` to fetch one."
-    exec "$t/install.sh" "$@"
+    # `deploy` copies tree -> ~/bin, which ASSUMES the tree is at least as new as
+    # what is installed. That is false whenever a checkout sits ahead of the last
+    # tag: the Cellar still holds the released files while ~/bin holds newer ones,
+    # and a plain deploy quietly reinstates the old pollers under launchd. Refuse
+    # the two cases we can prove are not an upgrade; everything uncertain proceeds,
+    # because a deploy that will not run is worse than one that re-copies the same
+    # bytes. install.sh backs up whatever it replaces either way.
+    args=(); force=0
+    for a in "$@"; do
+      if [ "$a" = "--force" ]; then force=1; else args+=("$a"); fi
+    done
+    if [ "$force" = 0 ]; then
+      tver="$(cat "$t/VERSION" 2>/dev/null)"; sver="$(stamp_field version 2>/dev/null)"
+      if [ -n "$tver" ] && [ -n "$sver" ] && ver_lt "$tver" "$sver"; then
+        echo "cmux-sentinel: refusing to deploy BACKWARDS — this tree is v$tver, ~/bin has v$sver." >&2
+        echo "  $t" >&2
+        echo "  Deploying would replace the newer installed copy. Use --force if that is what you want." >&2
+        exit 1
+      fi
+      swas="$(stamp_field payload 2>/dev/null)"; snow="$(payload_hash "$t" 2>/dev/null)"
+      if [ -n "$swas" ] && [ -n "$snow" ] && [ "$swas" != "$snow" ] && [ "$tver" = "$sver" ]; then
+        echo "cmux-sentinel: this tree and ~/bin are BOTH v$tver but their files differ." >&2
+        echo "  deployed payload $swas, this tree $snow ($t)" >&2
+        echo "  Same version is not same content, so this may not be an upgrade." >&2
+        echo "  Re-run with --force to deploy this tree anyway." >&2
+        exit 1
+      fi
+    fi
+    exec "$t/install.sh" ${args[@]+"${args[@]}"}
     ;;
   update)
     # The installer's own bootstrap git-pulls the cache and re-execs, so this is
