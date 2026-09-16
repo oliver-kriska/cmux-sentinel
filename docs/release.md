@@ -21,13 +21,31 @@ doctor header compares it with the `VERSION` published on `main`, so "am I on th
 self-serve. The fingerprint matters between releases: a checkout ahead of the last tag deploys newer
 files under the *same* version number, and only the fingerprint can tell those two copies apart.
 
-## 2. Tag it
+`make check` also runs `make notes`, which fails if `CHANGELOG.md` has no `## 0.3.0` section: that
+section becomes the GitHub Release body in step 2, so it has to exist before the tag does. The
+pre-commit hook runs the same check whenever `VERSION` or `CHANGELOG.md` is staged.
+
+## 2. Tag it — the GitHub Release is published for you
 
 The tag is what Homebrew downloads and hashes, so it must exist before the formula does.
 
 ```bash
-git tag v0.3.0
+git tag -a v0.3.0 -m "cmux-sentinel 0.3.0"
 git push origin v0.3.0
+```
+
+Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`, which creates the GitHub Release: title
+`v0.3.0`, body from `scripts/release-notes.sh` (the version's CHANGELOG section, upgrade
+instructions and a compare link to the previous release). The job fails if the tag's `VERSION`
+disagrees with the tag. Don't run `gh release create` by hand. If you want a descriptive title, edit
+it afterwards; re-running the workflow keeps it.
+
+Only the **highest** version tag is marked **Latest**, so re-publishing an older tag never takes the
+badge from the current release. The 0.2.x tags were never published as Releases, which is why
+GitHub showed v0.1.0 as Latest until v0.2.3. To backfill or refresh one:
+
+```bash
+gh workflow run release.yml -f tag=v0.2.2
 ```
 
 ## 3. Regenerate the formula

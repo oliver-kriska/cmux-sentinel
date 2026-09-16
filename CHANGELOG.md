@@ -11,6 +11,13 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
 
 ## Unreleased
 
+### Added
+
+- **Every version tag now becomes a GitHub Release, and the newest is marked Latest.** v0.2.0–v0.2.2
+  were published as tags only, so the repo page kept pointing at v0.1.0. A release workflow now
+  publishes each `vX.Y.Z` tag with its CHANGELOG section as the notes, and `make check` refuses a
+  version bump that has no notes yet.
+
 ### Fixed
 
 - **`brew upgrade` no longer prints a `post_install` deprecation warning.** Homebrew 7 deprecates

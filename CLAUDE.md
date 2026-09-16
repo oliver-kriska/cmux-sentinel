@@ -286,7 +286,8 @@ make sidebar-live                     # mount repo sidebar against live data; hu
 # offline tests (stub cmux/security/curl/stat/$HOME — run in CI too)
 make test   # bridge-state(58) poller-gate(130) codex-poller(83) install-hooks(62) sentinel-setup(69)
             # sentinel-doctor(75) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
-            # amp-bridge(43) amp-poller(61) entrypoint(52) formula(18) = 736 assertions total
+            # amp-bridge(43) amp-poller(61) entrypoint(52) formula(18) release-notes(20)
+            # = 756 assertions total
 ```
 
 ## Architecture / where things live
@@ -309,6 +310,8 @@ bin/cmux-open-in-zed.sh     OPT-IN cmux→Zed worktree handoff (`ze` alias / Ctr
 bin/zed-usage-tui.sh        OPT-IN usage meters rendered in a Zed terminal pane (reuses the pollers). No cmux writes.
 tests/                      bridge-state + poller-gate + codex-poller + amp-poller + install-hooks + sentinel-setup + sentinel-doctor + group-sync + zed-bridge + open-in-zed + usage-tui + amp-bridge + entrypoint. `make test`.
 scripts/make-formula.sh     GENERATES packaging/homebrew/cmux-sentinel.rb for a tag (url+sha256+version must agree); `--check` is the offline gate `make formula` runs.
+scripts/release-notes.sh    GitHub Release body for a version (its CHANGELOG section); `--check` = `make notes`; `--latest-tag` picks the only tag allowed to be Latest.
+.github/workflows/release.yml  publishes a GitHub Release on every vX.Y.Z tag push (Latest only for the highest tag); workflow_dispatch backfills.
 packaging/homebrew/         the tap's formula. Generated — regenerate after tagging, never hand-edit.
 VERSION + CHANGELOG.md      release stamp. install.sh copies VERSION (+ install date + short commit) to ~/.config/cmux-sentinel/VERSION; `cmux-sentinel version` and the doctor header read it back and compare against the remote VERSION (fail-silent; CMUX_SENTINEL_UPDATE_CHECK=0 disables).
 examples/                   usage-sentinels.env + launchd plist templates (com.cmux-claude-usage / com.cmux-codex-usage / com.cmux-amp-usage / com.cmux-group-sync).
@@ -701,6 +704,23 @@ Four things about it are non-obvious and each is a silent failure if you get it 
   no verb that can print. A deprecation turns into `odisabled` — a hard error — so keeping it would
   eventually break `brew install` for everyone, to print a line the caveats already print.
   `scripts/make-formula.sh` renders no `post_install`; check Homebrew source before bringing one back.
+
+**GitHub Releases are published by CI, not by hand** (`.github/workflows/release.yml`, on every
+`vX.Y.Z` tag push, plus `workflow_dispatch -f tag=…` to backfill). Before 2026-09-16 releases were
+tags only unless someone ran `gh release create`, and nobody did for v0.2.0–v0.2.2, so GitHub showed
+**v0.1.0 as "Latest"** for three releases. The body comes from `scripts/release-notes.sh`: the
+version's `## X.Y.Z` CHANGELOG section (awk with dots escaped, so `0.2.3` can't match a `0x2y3`
+heading), then upgrade instructions, then a compare link to the previous release. Tags are sorted
+numerically, so `0.10.0` comes after `0.9.0`. Three rules:
+**(1)** only the HIGHEST `vX.Y.Z` tag gets `--latest=true`, so backfilling an old tag can't take the
+badge from the current release;
+**(2)** the job fails when the tag's `VERSION` disagrees with the tag;
+**(3)** `make notes` (in `check`/`ci`, and a lefthook pre-commit on `VERSION`/`CHANGELOG.md`) fails a
+version bump whose CHANGELOG section doesn't exist yet, because after the tag is pushed it's too
+late. The workflow refreshes an existing Release without touching its title, so a hand-written
+title survives. `tests/release-notes.sh` covers all of this; its decoy heading sits ABOVE the real
+one on purpose — below it, the dot-escape assertion passed even with the escaping removed
+(mutation-tested).
 
 `make formula` (in `make check` and `ci`) keeps the committed formula honest, **offline**. It keys
 on whether the version is TAGGED, not merely on whether it matches: the formula describes the LAST

@@ -18,6 +18,11 @@ pre-commit:
     markdown:
       glob: "*.md"
       run: make markdown
+    # A VERSION bump must arrive with its CHANGELOG section: the release workflow
+    # publishes that section as the GitHub Release body when the tag is pushed.
+    notes:
+      glob: "{VERSION,CHANGELOG.md}"
+      run: make notes
     # Run the offline state-machine tests (bridge markers + poller gating) when
     # the bridge, the poller, or any test changes.
     test:

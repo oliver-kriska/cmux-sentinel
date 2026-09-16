@@ -12,15 +12,16 @@
 SHELL   := bash
 SCRIPTS := bin/cmux-sentinel bin/cmux-claude-usage.sh bin/cmux-codex-usage.sh bin/cmux-amp-usage.sh bin/cmux-sentinel-doctor.sh \
            bin/cmux-sentinel-setup.sh bin/cmux-sidebar-live-smoke.sh bin/cmux-group-sync.sh hooks/cmux-bridge.sh \
-           install.sh scripts/check-secrets.sh scripts/make-formula.sh \
+           install.sh scripts/check-secrets.sh scripts/make-formula.sh scripts/release-notes.sh \
            hooks/zed-bridge.sh bin/cmux-open-in-zed.sh bin/zed-usage-tui.sh \
            tests/bridge-state.sh tests/poller-gate.sh tests/codex-poller.sh \
            tests/install-hooks.sh tests/sentinel-setup.sh tests/sentinel-doctor.sh tests/group-sync.sh \
            tests/zed-bridge.sh tests/open-in-zed.sh tests/usage-tui.sh \
-           tests/amp-bridge.sh tests/amp-poller.sh tests/entrypoint.sh tests/formula.sh
+           tests/amp-bridge.sh tests/amp-poller.sh tests/entrypoint.sh tests/formula.sh \
+           tests/release-notes.sh
 MD      := $(wildcard *.md) $(wildcard docs/*.md)
 
-.PHONY: help check ci lint shellcheck secrets markdown formula test doctor sidebar sidebar-live fmt fmt-check
+.PHONY: help check ci lint shellcheck secrets markdown formula notes test doctor sidebar sidebar-live fmt fmt-check
 
 help:
 	@echo "make check   — shellcheck + secrets + markdown + test + sidebar (full local gate)"
@@ -56,6 +57,11 @@ markdown:
 formula:
 	@./scripts/make-formula.sh --check
 
+# every tag becomes a GitHub Release whose body is VERSION's CHANGELOG section
+# (.github/workflows/release.yml); fail here, before tagging, if it is missing.
+notes:
+	@./scripts/release-notes.sh --check
+
 # state machines: offline, stub cmux/security/curl, run on Linux CI too.
 #   bridge-state  — agent activity markers (⚡/⏳/❓)
 #   poller-gate   — Claude usage-poller gating + malformed-value clamping + bare-label resolve
@@ -71,6 +77,7 @@ formula:
 #   usage-tui      — zed-usage-tui.sh terminal-pane meters (bar render, %, dots, provider gating, offline)
 #   entrypoint     — cmux-sentinel dispatcher (routing, arg/exit pass-through, brew layout, deploy)
 #   formula        — Homebrew formula generator: version agreement, offline --check
+#   release-notes  — GitHub Release body from CHANGELOG + which tag may be Latest
 #   amp-bridge's adapter compatibility harness uses Node.js (test-only; preinstalled in CI)
 test:
 	bash tests/bridge-state.sh
@@ -87,6 +94,7 @@ test:
 	bash tests/amp-poller.sh
 	bash tests/entrypoint.sh
 	bash tests/formula.sh
+	bash tests/release-notes.sh
 
 # health-check the live setup (read-only) — bridge/hooks/launchd/automation/sentinels.
 doctor:
@@ -123,9 +131,9 @@ sidebar:
 sidebar-live:
 	@./bin/cmux-sidebar-live-smoke.sh
 
-check: shellcheck secrets markdown formula test sidebar
+check: shellcheck secrets markdown formula notes test sidebar
 lint: check
-ci: shellcheck secrets markdown formula test   ## CI omits `sidebar` (no cmux on the runner)
+ci: shellcheck secrets markdown formula notes test   ## CI omits `sidebar` (no cmux on the runner)
 
 # shfmt is OPT-IN, not a gate: the scripts use a deliberately terse one-liner
 # style (`die() { echo ...; exit 1; }`) that shfmt would explode. Run this only

@@ -1,0 +1,71 @@
+# Publish a GitHub Release for every version tag.
+#
+# Tags alone are invisible on the repo page. v0.2.0–v0.2.2 shipped as tags only,
+# so GitHub kept showing v0.1.0 as "Latest" long after it was three releases old.
+# Now pushing `vX.Y.Z` creates the Release, with notes from CHANGELOG.md.
+#
+# Only the HIGHEST version tag is marked Latest. Re-running this for an older tag
+# (workflow_dispatch — how the missing 0.2.x Releases can be backfilled) must
+# never take the badge away from the current release.
+#
+# Homebrew does not read this: the formula downloads the tag's tarball, and the
+# tap is still updated by hand (docs/release.md step 4).
+
+name: release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to publish or refresh, e.g. v0.2.2
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0 # every tag: the compare link and the Latest decision need them
+          persist-credentials: false
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          # Passed through env, never interpolated into the script: a
+          # workflow_dispatch input is user-supplied text.
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::not a release tag: $TAG"; exit 1
+          fi
+          ver="${TAG#v}"
+          # The tag must describe what it points at, or the Release, the formula
+          # and `cmux-sentinel version` would disagree about what vX.Y.Z is.
+          if [ "$(cat VERSION)" != "$ver" ]; then
+            echo "::error::$TAG points at a commit whose VERSION is $(cat VERSION)"; exit 1
+          fi
+          scripts/release-notes.sh "$ver" > "$RUNNER_TEMP/notes.md"
+
+          latest=false
+          if [ "$(scripts/release-notes.sh --latest-tag)" = "$TAG" ]; then latest=true; fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Keep a hand-written title; refresh the notes and the Latest flag.
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --latest="$latest"
+            echo "updated $TAG (latest=$latest)"
+          else
+            gh release create "$TAG" --verify-tag --title "$TAG" \
+              --notes-file "$RUNNER_TEMP/notes.md" --latest="$latest"
+            echo "created $TAG (latest=$latest)"
+          fi
