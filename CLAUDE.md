@@ -691,8 +691,16 @@ Four things about it are non-obvious and each is a silent failure if you get it 
   `&&` chain silently skipped the check — indistinguishable from "no drift". `deploy`'s tests passed
   anyway because it assigns standalone; only `tests/entrypoint.sh` T11 caught it.
   Covered by `tests/entrypoint.sh` T11–T13 and `tests/sentinel-doctor.sh` T17.
-- **The "now run deploy" message goes in `post_install`, not `caveats`.** Homebrew prints `caveats`
-  only on the FIRST install — and the upgrade is exactly when the message matters.
+- **The "now run deploy" message lives in `caveats`, which DO print on upgrade — there is no
+  `post_install`.** This note used to say the opposite ("caveats only print on the FIRST install, so
+  use `post_install`"), and the formula carried a `post_install` `ohai` for it. Both were wrong on
+  Homebrew 7, found 2026-09-16 while upgrading to 0.2.3: the upgrade printed the full caveats block,
+  and `FormulaInstaller#caveats` gates only on `only_deps?` / `installed_on_request?` / `quiet?`,
+  never on first-install. Meanwhile `post_install` became `odeprecated` in favour of
+  `post_install_steps`, a declarative file-operation DSL (`mkdir_p`, `symlink`, cache updates) with
+  no verb that can print. A deprecation turns into `odisabled` — a hard error — so keeping it would
+  eventually break `brew install` for everyone, to print a line the caveats already print.
+  `scripts/make-formula.sh` renders no `post_install`; check Homebrew source before bringing one back.
 
 `make formula` (in `make check` and `ci`) keeps the committed formula honest, **offline**. It keys
 on whether the version is TAGGED, not merely on whether it matches: the formula describes the LAST

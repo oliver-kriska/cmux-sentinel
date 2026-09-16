@@ -83,8 +83,9 @@ cmux-sentinel deploy          # runs the tree's own install.sh: files, hooks, ag
 **An upgrade needs both too.** `brew upgrade` refreshes the Cellar copy while launchd keeps running
 the scripts in `~/bin` — new code installed, nothing changed, no error. That is why:
 
-- the "run deploy" line lives in the formula's `post_install`, not `caveats` (Homebrew prints
-  caveats only on the first install, and the upgrade is when the message matters);
+- the "run deploy" line lives in the formula's `caveats`, which Homebrew prints on upgrade as well
+  as on first install. There is no `post_install`: Homebrew 7 deprecates it, and its replacement
+  (`post_install_steps`) only performs file operations and cannot print a message;
 - `cmux-sentinel update` **refuses** on a Homebrew-managed copy and names `brew upgrade` instead —
   curl-installing over a brew install leaves two updaters fighting over `~/bin`, with brew still
   reporting a version it no longer controls;

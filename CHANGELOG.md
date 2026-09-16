@@ -9,6 +9,15 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
 
 `~/bin/cmux-sentinel-doctor.sh` reports the version you actually have.
 
+## Unreleased
+
+### Fixed
+
+- **`brew upgrade` no longer prints a `post_install` deprecation warning.** Homebrew 7 deprecates
+  `post_install`, and a deprecation eventually becomes a hard error. The formula only used it to
+  print "run `cmux-sentinel deploy`", which its caveats already print on every upgrade, so it is
+  gone. Nothing you install changes.
+
 ## 0.2.3 — 2026-09-16
 
 ### Added

@@ -91,13 +91,11 @@ class CmuxSentinel < Formula
     bin.write_exec_script libexec/"bin/cmux-sentinel"
   end
 
-  # Homebrew prints caveats only on the FIRST install, never on upgrade — and the
-  # message that has to survive an upgrade is exactly this one, because brew
-  # updates the Cellar copy while launchd keeps running the scripts in ~/bin.
-  def post_install
-    ohai "Run 'cmux-sentinel deploy' to install this version into ~/bin and ~/.config"
-  end
-
+  # Caveats print on UPGRADE too, and the upgrade is when this message matters:
+  # brew replaces the Cellar copy while launchd keeps running the scripts in ~/bin.
+  # FormulaInstaller#caveats gates only on only_deps?/installed_on_request?/quiet?,
+  # never on first-install. There is deliberately no post_install: Homebrew 7
+  # deprecates it for post_install_steps, a file-operation DSL that cannot print.
   def caveats
     <<~EOS
       Homebrew installed the files; two commands finish the job:
