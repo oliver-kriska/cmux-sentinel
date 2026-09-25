@@ -86,8 +86,7 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   `AgentChatSessionRegistry*`) plus the ⌘N numbering source (`WorkspaceShortcutMapper`,
   `SidebarWorkspaceRenderItem`, `TabManager.selectWorkspaceByNumber`) are **untouched** in the
   v0.64.23…v0.64.24 diff — so no render probe was needed. 0.64.24 is a 20-PR patch release
-  (Cloud/iOS/IROH/browser/Computer-Use). See `.claude/research/2026-09-16-cmux-0.64.24-release-check.md`.
-  **How the sidebar uses it (shipped 2026-09-15): native state is OR-ed with the title markers,
+  (Cloud/iOS/IROH/browser/Computer-Use). See `.claude/research/2026-09-16-cmux-0.64.24-release-check.md`.  **How the sidebar uses it (shipped 2026-09-15): native state is OR-ed with the title markers,
   never instead of them.** `isWorking` = `⚡` marker OR any agent `status == "working"` whose
   `lastActivityAt` is under 3600s old; `isWaiting` = `❓` marker OR any NON-Claude agent in
   `needs_input`. Two rules, each learned: **(1) never trust native `needs_input` for
@@ -323,7 +322,12 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
   parked, so it shows the orange needs-you treatment, NOT green "Working…"). The idle "waiting for
   input" Notification that fires ~60s after a turn ENDS is gated out (`_notify_waiting` checks for a
   live pid) so a finished workspace never flips to ❓. Precedence: compacting
-  > waiting > working > needs-you(unread) > idle. The sidebar
+  > waiting > working > idle. **cmux's `unread` is NOT needs-you** (removed 2026-09-25): the
+  notification store fills with passive notices — Claude's idle "waiting for your input", Amp's
+  "Finished responding", "Command done", "Agent is ready" — which stay unread until that EXACT tab is
+  focused, so multi-tab workspaces showed days-old orange "needs you · 6" rows. That was the rejected
+  "done" marker sneaking back in through cmux's own hooks, bypassing the bridge's `_notify_waiting`
+  gate. Unread now renders as a dim count only. The sidebar
   detects them with `.hasPrefix` and strips them for display. STATIC is mandatory: an animated /
   frame-by-frame marker in the title floods cmux's title coalescer and freezes the sidebar
   (upstream cmux #6291). The bridge ref-counts live sessions per workspace as files under

@@ -20,6 +20,12 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
 
 ### Fixed
 
+- **Old notifications no longer turn workspaces orange "needs you".** The sidebar treated cmux's
+  unread-notification count as "needs you", but that count mostly holds passive notices such as
+  Claude's idle "waiting for your input", Amp's "Finished responding" and "Command done". Each stays
+  unread until you focus that exact tab, so workspaces with several tabs showed "needs you · 6" for
+  days. "Needs you" now means an agent is actually blocked on you (the `❓` marker, or another
+  agent's approval prompt). The unread count still shows, as a dim number.
 - **`brew upgrade` no longer prints a `post_install` deprecation warning.** Homebrew 7 deprecates
   `post_install`, and a deprecation eventually becomes a hard error. The formula only used it to
   print "run `cmux-sentinel deploy`", which its caveats already print on every upgrade, so it is

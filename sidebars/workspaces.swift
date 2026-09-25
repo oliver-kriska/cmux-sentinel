@@ -7,8 +7,11 @@
 //   1. Agent activity — compacting (purple) / working (green) / needs-you
 //      (orange) / idle (dim). Compacting, waiting & working are read from STATIC
 //      markers the bridge keeps at the FRONT of the TITLE ("⏳"=compacting,
-//      "❓"=waiting-on-you, "⚡"=working); needs-you ALSO triggers on `unread`.
-//      Precedence: compacting > waiting > working > needs-you(unread) > idle.
+//      "❓"=waiting-on-you, "⚡"=working). `unread` is NOT needs-you: cmux's
+//      notification store fills with passive "Finished responding" / idle
+//      "waiting for your input" notices that stay unread until you focus that
+//      exact tab, so it's shown as a dim count only.
+//      Precedence: compacting > waiting > working > idle.
 //      "Waiting" is the bridge's way of saying Claude asked a question / hit a
 //      permission prompt — the row shows the orange needs-you treatment, not
 //      green "Working…", because the session is parked on YOU.
@@ -98,13 +101,15 @@ func isWaiting(_ w) -> Bool {
   if w.title.hasPrefix("❓") { return true }
   return agentNeedsInput(w)
 }
-// needs-you = Claude is waiting on you (the ❓ marker) OR there are unread
-// messages while no agent is mid-turn. Working/compacting outrank a bare unread.
+// needs-you = an agent is BLOCKED on you (the ❓ marker, or a native non-Claude
+// needs_input) — never a bare `unread`. cmux's unread count is fed by passive
+// end-of-turn notices (Claude's idle "waiting for your input", Amp's "Finished
+// responding", "Command done") that stay unread until that exact tab is focused,
+// so in multi-tab workspaces it lingered for days as a false orange alarm — the
+// rejected "done" marker by another route.
 func needsYou(_ w) -> Bool {
   if isCompacting(w) { return false }
-  if isWaiting(w) { return true }
-  if isWorking(w) { return false }
-  return w.unread > 0
+  return isWaiting(w)
 }
 // Show working by COLOR, not the glyph: strip the leading "⚡" marker from the
 // displayed title. `.split` keeps the rest of the name intact (spaces and all);
@@ -151,10 +156,6 @@ func activityText(_ w) -> String {
   if isCompacting(w) { return "Compacting…" }
   if isWaiting(w) { return "asking…" }   // Claude asked a question / needs permission
   if isWorking(w) { return workLabel(w) }
-  if needsYou(w) {
-    if w.unread > 1 { return "needs you · \(w.unread)" }
-    return "needs you"
-  }
   return "idle"
 }
 func activityColor(_ w) -> String {
@@ -517,11 +518,11 @@ func row(_ w) -> some View {
           }
         }
         Spacer()
+        // Dim, unfilled: unread is "you haven't looked", not "you're needed".
         if w.unread > 0 {
           Text("\(w.unread)")
-            .font(.system(size: 10, design: .monospaced)).bold()
-            .foregroundColor("#1F2430").padding(4)
-            .background { Circle().foregroundColor("#FFCC66") }
+            .font(.system(size: 10, design: .monospaced))
+            .foregroundColor("#707A8C").padding(4)
         }
         Button(action: { cmux("workspace.close", workspace_id: w.id) }) {
           Image(systemName: "xmark")
