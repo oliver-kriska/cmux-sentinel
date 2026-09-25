@@ -86,7 +86,10 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   `AgentChatSessionRegistry*`) plus the ⌘N numbering source (`WorkspaceShortcutMapper`,
   `SidebarWorkspaceRenderItem`, `TabManager.selectWorkspaceByNumber`) are **untouched** in the
   v0.64.23…v0.64.24 diff — so no render probe was needed. 0.64.24 is a 20-PR patch release
-  (Cloud/iOS/IROH/browser/Computer-Use). See `.claude/research/2026-09-16-cmux-0.64.24-release-check.md`.  **How the sidebar uses it (shipped 2026-09-15): native state is OR-ed with the title markers,
+  (Cloud/iOS/IROH/browser/Computer-Use). See `.claude/research/2026-09-16-cmux-0.64.24-release-check.md`.
+  Re-read on **0.64.25** (271 commits): the same 72 watched files are **byte-identical** to v0.64.24.
+  The compare API caps at 300 files, so diff the blob SHAs from `git/trees/<tag>?recursive=1`
+  instead. See `.claude/research/2026-09-25-cmux-0.64.25-release-check.md`.  **How the sidebar uses it (shipped 2026-09-15): native state is OR-ed with the title markers,
   never instead of them.** `isWorking` = `⚡` marker OR any agent `status == "working"` whose
   `lastActivityAt` is under 3600s old; `isWaiting` = `❓` marker OR any NON-Claude agent in
   `needs_input`. Two rules, each learned: **(1) never trust native `needs_input` for

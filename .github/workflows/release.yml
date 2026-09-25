@@ -34,7 +34,7 @@ jobs:
       # The workflow's own ref: the tag itself on a tag push, the default branch
       # on a dispatch. Not the dispatched tag — tags older than this workflow
       # have no scripts/release-notes.sh, and main's CHANGELOG describes them all.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # every tag: the compare link and the Latest decision need them
           persist-credentials: false

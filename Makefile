@@ -47,7 +47,7 @@ secrets:
 # gate dies on a bare `make: *** [markdown] Error 127` that says nothing about what
 # to install. Fall back to npx at CI's pinned version (.github/workflows/ci.yml), and
 # if even that is unavailable, say exactly what to install instead of exiting 127.
-MDLINT_VERSION := 0.47.0
+MDLINT_VERSION := 0.49.1
 markdown:
 	@if command -v markdownlint >/dev/null 2>&1; then 	  echo "markdownlint $(MD)"; markdownlint $(MD); 	elif command -v npx >/dev/null 2>&1; then 	  echo "markdownlint not on PATH (node version switch?) — falling back to npx markdownlint-cli@$(MDLINT_VERSION)"; 	  npx --yes markdownlint-cli@$(MDLINT_VERSION) $(MD); 	else 	  echo "markdownlint-cli@$(MDLINT_VERSION) is missing and npx is unavailable." >&2; 	  echo "  npm install -g markdownlint-cli@$(MDLINT_VERSION)     # per node version" >&2; 	  echo "  mise use -g npm:markdownlint-cli@$(MDLINT_VERSION)    # survives a node switch" >&2; 	  exit 1; 	fi
 
