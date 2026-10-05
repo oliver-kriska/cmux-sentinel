@@ -95,7 +95,8 @@ PROVIDER_ID="claude"
 USAGE_PROVIDERS="${USAGE_PROVIDERS:-claude}"
 USAGE_STATE_DIR="${CMUX_SENTINEL_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/cmux-sentinel}/usage"
 
-die() { echo "ERR: $*" >&2; exit 1; }
+log_error() { printf 'ERR: [%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2; }
+die() { log_error "$@"; exit 1; }
 
 # Record only a COMPLETE successful --update. The doctor reads the epoch payload
 # instead of filesystem mtimes, which keeps the check portable and easy to stub.
@@ -353,7 +354,7 @@ _backoff_arm() {
   deadline=$(( $(date +%s) + delay ))
   mkdir -p "$USAGE_STATE_DIR" 2>/dev/null || return 0
   printf '%s %s\n' "$deadline" "$n" > "$BACKOFF_FILE" 2>/dev/null || true
-  echo "ERR: backing off ${delay}s after a 429 (attempt $n) — not calling the endpoint again until then" >&2
+  log_error "backing off ${delay}s after a 429 (attempt $n) — not calling the endpoint again until then"
 }
 
 _backoff_clear() { rm -f "$BACKOFF_FILE" 2>/dev/null || true; }

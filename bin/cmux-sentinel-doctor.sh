@@ -245,15 +245,26 @@ poller_err_log() { # $1 = launchd job label — prints the log path, or nothing
   [ -n "$path" ] && [ -f "$path" ] && printf '%s' "$path"
 }
 
-last_poller_error() { # $1 = launchd job label — prints the newest error line
-  local log line
+last_poller_error() { # $1 = launchd job label; $2 = last successful update epoch (optional)
+  local log line epoch time_note=""
   log=$(poller_err_log "$1")
   [ -n "$log" ] || return 0
   # The poller's own messages are "ERR: …"; prefer those over curl/tool chatter.
   line=$(grep -a 'ERR:' "$log" 2>/dev/null | tail -1)
   [ -n "$line" ] || line=$(grep -av '^[[:space:]]*$' "$log" 2>/dev/null | tail -1)
+  [ -n "$line" ] || return 0
+  epoch=$(printf '%s' "$line" | jq -Rr 'try (capture("^ERR: \\[(?<at>[^]]+)\\]").at | fromdateiso8601) catch empty' 2>/dev/null)
+  if [ -n "$epoch" ]; then
+    # An error strictly before recovery cannot explain today's stale data. Keep
+    # same-second errors: missing-sentinel diagnostics can follow record_success.
+    [ -n "${2:-}" ] && [ "$epoch" -lt "$2" ] && return 0
+  else
+    # Old installs and external tools have no timestamp. Never infer one from
+    # the log mtime — a later append says nothing about when this line happened.
+    time_note=" (time unknown)"
+  fi
   # One line, bounded — a log line is untrusted text that must not wreck the report.
-  printf '%.200s' "$line"
+  printf '%.200s%s' "$line" "$time_note"
 }
 
 # Poller loaded != poller succeeding. Each provider atomically records the epoch
@@ -277,7 +288,7 @@ check_usage_freshness() { # $1=provider  $2=poller filename  $3=launchd job labe
     warn "$provider freshness stamp is in the future — check the system clock, then run: ~/bin/$script --update"
   elif [ "$age" -gt "$stale_after" ]; then
     warn "$provider data stale (last successful update $(age_label "$age") ago; expected within $(age_label "$stale_after")) — run: ~/bin/$script --update"
-    reason=$([ -n "$job" ] && last_poller_error "$job")
+    reason=$([ -n "$job" ] && last_poller_error "$job" "$saved")
     [ -n "$reason" ] && note "last poller error: $reason"
   else
     [ "$age" -lt 0 ] && age=0

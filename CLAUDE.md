@@ -286,10 +286,10 @@ cmux-sentinel doctor                   # dispatcher: setup/doctor/version/usage/
 make sidebar-live                     # mount repo sidebar against live data; human visual verdict
 
 # offline tests (stub cmux/security/curl/stat/$HOME — run in CI too)
-make test   # bridge-state(58) poller-gate(130) codex-poller(83) install-hooks(62) sentinel-setup(69)
-            # sentinel-doctor(75) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
-            # amp-bridge(43) amp-poller(61) entrypoint(52) formula(18) release-notes(20)
-            # = 756 assertions total
+make test   # bridge-state(58) poller-gate(132) codex-poller(84) install-hooks(62) sentinel-setup(69)
+            # sentinel-doctor(80) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
+            # amp-bridge(43) amp-poller(62) entrypoint(52) formula(18) release-notes(20)
+            # = 765 assertions total
 ```
 
 ## Architecture / where things live
@@ -611,7 +611,12 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
   response BODY is never printed — only the status, on stderr. Dropping `curl -f` is what makes the
   status readable; the parse tolerates a missing `-w` line and falls back to the exit code.
   Complementing it, `bin/cmux-sentinel-doctor.sh` reads the plist's `StandardErrorPath` and prints the
-  newest `ERR:` line under a stale provider, so "stale — and now what?" answers itself. Regression
+  newest `ERR:` line under a stale provider, so "stale — and now what?" answers itself. Since
+  2026-10-01 every poller writes `ERR: [YYYY-MM-DDTHH:MM:SSZ] …` (UTC). Before that, an undated line
+  in a `.err` file couldn't be placed before or after a reboot. The doctor skips an error strictly
+  OLDER than the last-success stamp. It keeps one from the SAME second, because a missing sibling
+  sentinel is logged after the stamp is written. It shows a legacy undated line as `time unknown`
+  rather than hiding it. Regression
   tests: `tests/poller-gate.sh` T7–T9, `tests/sentinel-doctor.sh` T8.
 - **`install.sh` FINISHES THE JOB — deploying files is not an install.** It used to copy files and
   print six manual steps; step 1 (`cmux-sentinel-setup.sh`) is idempotent, fail-open and needs no

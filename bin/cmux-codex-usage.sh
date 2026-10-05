@@ -79,7 +79,7 @@ RPC_READ_INTERVALS="${CODEX_RPC_READ_INTERVALS:-300}"
 case "$RPC_INIT_INTERVALS" in ''|*[!0-9]*) RPC_INIT_INTERVALS=50 ;; esac
 case "$RPC_READ_INTERVALS" in ''|*[!0-9]*) RPC_READ_INTERVALS=300 ;; esac
 
-die() { echo "ERR: $*" >&2; exit 1; }
+die() { printf 'ERR: [%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2; exit 1; }
 
 # Record only a COMPLETE successful --update. Keep this best-effort: freshness
 # diagnostics must never turn an already-painted meter into a failed launchd run.

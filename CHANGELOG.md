@@ -20,6 +20,9 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
 
 ### Fixed
 
+- **Poller errors now carry a UTC timestamp, and the doctor no longer blames an error that
+  predates a later successful refresh.** Undated errors from older versions still show, marked
+  "time unknown".
 - **Old notifications no longer turn workspaces orange "needs you".** The sidebar treated cmux's
   unread-notification count as "needs you", but that count mostly holds passive notices such as
   Claude's idle "waiting for your input", Amp's "Finished responding" and "Command done". Each stays

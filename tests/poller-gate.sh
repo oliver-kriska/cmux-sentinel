@@ -181,7 +181,9 @@ ckno "not-installed is a no-op"
 
 echo "T3: installed + offline (creds present, fetch fails) → exit 1, ⚠ offline stamped"
 reset; printf '%s' "$TOKEN_JSON" > "$CREDS"
-STUB_CURL="fail" bash "$POLLER" --update; ckcode "installed+offline --update" "$?" 1
+STUB_CURL="fail" bash "$POLLER" --update 2>"$ROOT/error.log"; ckcode "installed+offline --update" "$?" 1
+OUT=$(cat "$ROOT/error.log")
+ckout "offline diagnostic carries a UTC timestamp" '^ERR: \[[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}T[0-9]\{2\}:[0-9]\{2\}:[0-9]\{2\}Z\] usage request failed:'
 ckhas "offline stamps ⚠" "⚠"
 ckprog "offline clears the native bar so the ⚠ title shows through" "CLEAR"
 cknostamp "offline paint is not a successful refresh"
@@ -458,8 +460,10 @@ echo "T13: a throttled poll keeps the meters, and stops hammering the endpoint"
 reset
 STUB_CURL="ok" bash "$POLLER" --update >/dev/null 2>&1     # a good body to fall back on
 rm -f "$RENAMES" "$PROGRESS" "$STAMP" "$CURLCALLS"
-STUB_CURL="ok" STUB_HTTP=429 CMUX_SENTINEL_USAGE_CACHE_TTL=0 bash "$POLLER" --update >/dev/null 2>&1
+STUB_CURL="ok" STUB_HTTP=429 CMUX_SENTINEL_USAGE_CACHE_TTL=0 bash "$POLLER" --update >/dev/null 2>"$ROOT/error.log"
 ckcode "a throttled poll still fails" "$?" 1
+OUT=$(cat "$ROOT/error.log")
+ckout "nonfatal backoff diagnostic is timestamped too" '^ERR: \[[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}T[0-9]\{2\}:[0-9]\{2\}:[0-9]\{2\}Z\] backing off '
 ckhas "the row keeps its number" "5h |7%"
 ckhas "…and says how old it is" "old"
 ckhas "the stale detail stays one | segment (the sidebar splits on it)" "5h |7% ·"

@@ -246,14 +246,38 @@ cat > "$HOME/Library/LaunchAgents/com.cmux-codex-usage.plist" <<PLIST
 PLIST
 printf 'some older noise\nERR: Codex login expired; run codex logout, then codex login\n' > "$ROOT/codex-usage.err"
 out4="$(STUB_CODEX_RPC=expanded bash "$DOCTOR" 2>&1)"
-case "$out4" in *"last poller error: ERR: Codex login expired"*) ok "a stale provider reports the poller's own last error";;
-  *) bad "stale provider did not surface the launchd error log";; esac
+case "$out4" in *"last poller error: ERR: Codex login expired; run codex logout, then codex login (time unknown)"*) ok "legacy errors remain visible but explicitly undated";;
+  *) bad "legacy error was hidden or presented without an unknown-time warning";; esac
 case "$out4" in *"claude data fresh (updated "*) ok "fresh Claude update is recognized";;
   *) bad "fresh Claude update was not recognized";; esac
 case "$out4" in *"codex data stale (last successful update 15m ago; expected within 15m)"*) ok "stale Codex data is actionable";;
   *) bad "stale Codex data was not reported";; esac
 case "$out4" in *"amp data freshness unknown — no successful update recorded"*) ok "missing Amp freshness is explicit";;
   *) bad "missing Amp freshness was not reported";; esac
+
+# Fixed UTC boundary: 978307200 is 2001-01-01 00:00:00Z. An old error must not
+# explain a later stale stamp after recovery; an error in the SAME second can
+# follow the stamp (e.g. a missing sibling sentinel), so only strictly older wins.
+printf '978307200\n' > "$state/codex.last-success"
+printf 'ERR: [2000-12-31T23:59:59Z] recovered socket failure\n' > "$ROOT/codex-usage.err"
+out4="$(STUB_CODEX_RPC=expanded bash "$DOCTOR" 2>&1)"
+case "$out4" in *"last poller error:"*) bad "an error older than the last success was replayed";;
+  *) ok "a successful update retires earlier timestamped errors";; esac
+for at in '2001-01-01T00:00:00Z' '2001-01-01T00:00:01Z'; do
+  printf 'ERR: [%s] current socket failure\ntrailing tool noise\n' "$at" > "$ROOT/codex-usage.err"
+  out4="$(STUB_CODEX_RPC=expanded bash "$DOCTOR" 2>&1)"
+  case "$out4" in *"last poller error: ERR: [$at] current socket failure"*) ok "error at $at survives the success boundary and trailing noise";;
+    *) bad "a same-second or newer error was lost";; esac
+done
+rm -f "$state/codex.last-success"
+out4="$(STUB_CODEX_RPC=expanded bash "$DOCTOR" 2>&1)"
+case "$out4" in *"last poller error: ERR: [2001-01-01T00:00:01Z] current socket failure"*) ok "dated error is visible without any success stamp";;
+  *) bad "missing success stamp suppressed the error";; esac
+printf 'ERR: [not-a-date] retained diagnostic\n' > "$ROOT/codex-usage.err"
+out4="$(STUB_CODEX_RPC=expanded bash "$DOCTOR" 2>&1)"
+case "$out4" in *"ERR: [not-a-date] retained diagnostic (time unknown)"*) ok "malformed dates remain diagnostic, not false chronology";;
+  *) bad "malformed timestamp hid the error or invented its time";; esac
+printf '%s\n' "$((now - 901))" > "$state/codex.last-success"
 
 echo "T9: ⌘N drift is measured on cmux's NUMBERED rows, not raw indices"
 # cmux 0.64.22 (#9176) numbers only the ordinary sidebar rows: a group's ANCHOR

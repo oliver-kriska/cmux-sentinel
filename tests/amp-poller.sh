@@ -225,6 +225,8 @@ has "unparseable --update clears the bar" "$(cat "$ROOT/.progress")" "CLEARED"
 
 reset_logs
 out=$(AMP_FIXTURE="$FRESH" AMP_FAIL=1 run --update)
+printf '%s\n' "$out" | grep -Eq '^ERR: \[[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\] '
+is "offline diagnostic carries a UTC timestamp" "$?" "0"
 has "amp usage failure marks offline" "$(cat "$ROOT/.renames")" "⚠ offline"
 nostamp "offline paint is not a successful refresh"
 

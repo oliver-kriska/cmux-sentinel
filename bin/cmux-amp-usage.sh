@@ -84,7 +84,7 @@ USAGE_PROVIDERS="${USAGE_PROVIDERS:-claude}"
 ORB_METER="${AMP_ORB_METER:-0}"
 USAGE_STATE_DIR="${CMUX_SENTINEL_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/cmux-sentinel}/usage"
 
-die() { echo "ERR: $*" >&2; exit 1; }
+die() { printf 'ERR: [%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2; exit 1; }
 
 # Record only a COMPLETE successful --update. Keep this best-effort: freshness
 # diagnostics must never turn an already-painted meter into a failed launchd run.

@@ -181,7 +181,9 @@ ckno "apikey mode is a no-op"
 
 echo "T3: logged in + fetch fails (offline / expired token) → exit 1, ⚠ offline stamped"
 reset; auth_chatgpt
-STUB_RPC=fail USAGE_PROVIDERS="claude codex" bash "$POLLER" --update; ckcode "offline --update" "$?" 1
+STUB_RPC=fail USAGE_PROVIDERS="claude codex" bash "$POLLER" --update 2>"$ROOT/error.log"; ckcode "offline --update" "$?" 1
+grep -Eq '^ERR: \[[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\] Codex rate-limit RPC failed' "$ROOT/error.log"
+ckcode "offline diagnostic carries a UTC timestamp" "$?" 0
 ckhas "stamps ⚠" "⚠"
 ckprog "offline clears the native bar so the ⚠ title shows through" "CLEAR"
 cknostamp "offline paint is not a successful refresh"
