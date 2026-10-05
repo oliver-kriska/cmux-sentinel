@@ -66,7 +66,9 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   `description`, `color`, `branch`+`dirty`, `pr`+`prs`, `progress`, `latestMessage`, `latestPrompt`,
   `latestAt`, `remote`. ~~Consequence: a cmux-native agent integration can never light up this
   sidebar — per-agent title-marker bridges stay mandatory.~~ (`latestMessage`/`latestPrompt`/
-  `latestAt` are bindable and currently unused here.) Upstream issue
+  `latestAt` are bindable and currently unused here. `latestMessage` holds the last USER prompt,
+  not the agent's reply — AX render probe 2026-10-05 — so it can't show that an agent ended on a
+  question; the bridge reads that from the `Stop` payload instead.) Upstream issue
   `manaflow-ai/cmux#9001` tracks unifying this projection with the snapshot's missing `progress`
   (still OPEN, no maintainer response as of 2026-08-10; so is #9002 for a render diagnostic).
   Re-read on 0.64.22: the binding list above is **UNCHANGED** — nothing gained, nothing lost.
@@ -286,10 +288,10 @@ cmux-sentinel doctor                   # dispatcher: setup/doctor/version/usage/
 make sidebar-live                     # mount repo sidebar against live data; human visual verdict
 
 # offline tests (stub cmux/security/curl/stat/$HOME — run in CI too)
-make test   # bridge-state(58) poller-gate(132) codex-poller(84) install-hooks(62) sentinel-setup(69)
+make test   # bridge-state(102) poller-gate(132) codex-poller(84) install-hooks(62) sentinel-setup(69)
             # sentinel-doctor(80) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
-            # amp-bridge(43) amp-poller(62) entrypoint(52) formula(18) release-notes(20)
-            # = 765 assertions total
+            # amp-bridge(54) amp-poller(62) entrypoint(52) formula(18) release-notes(20)
+            # = 820 assertions total
 ```
 
 ## Architecture / where things live
@@ -324,7 +326,32 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
   `AskUserQuestion`/`ExitPlanMode`, or hit a MID-TURN permission `Notification` — it's alive but
   parked, so it shows the orange needs-you treatment, NOT green "Working…"). The idle "waiting for
   input" Notification that fires ~60s after a turn ENDS is gated out (`_notify_waiting` checks for a
-  live pid) so a finished workspace never flips to ❓. Precedence: compacting
+  live pid) so a finished workspace never flips to ❓. **A turn that ENDS on a plain-text
+  question is ❓ too** (2026-10-05). Oliver reported the sidebar "doesn't show when an agent is
+  asking". A 3-day transcript scan found 117 turns whose last line ended in `?`, against 147
+  `AskUserQuestion`/`ExitPlanMode` calls, and those rows just went quiet. (The scan used the same
+  heuristic, so it counts candidates, not confirmed questions.) `Stop` reads
+  `last_assistant_message` (Claude Code, seen on 2.1.289; the Amp adapter sends its last non-blank
+  text block on `agent.end(done)`, nothing on `cancelled`). When the last non-blank line ends in
+  `?` or `？` after peeling only markdown emphasis (`*`, `_`), `_stop_asking` drops the working
+  file and writes `stop` into `.waiting.<pid>`. Quotes and code spans are NOT peeled ("Renamed it
+  to `Continue?`" is a statement); a statement whose last line still ends in `?` is an accepted
+  false positive. A question followed by an options list is missed, also on purpose: a false
+  amber row costs the signal more than a missed one. **No timer, by Oliver's choice** ("until I
+  reply"): an offer he ignores stays amber. Four rules from Amp's review, each tested:
+  **(1)** only `UserPromptSubmit` clears a `stop` flag. A background agent's or subagent's tool call
+  can fire this session's `PreToolUse` too (a precaution, not probed here), so it must not count as
+  the answer; a question DIALOG is still answered by the next tool call (empty flag). **(2)** a `Stop` from an earlier turn is
+  ignored: `UserPromptSubmit` writes `prompt_id` into the session's working file (the Amp adapter
+  passes `agent.start`/`agent.end`'s `id`), and `_stale_stop` skips a `Stop` whose id differs.
+  A prompt you queued can start the next turn before the previous turn's async `Stop` hook runs.
+  Only `UserPromptSubmit` records the id, in case subagent tool calls carry another turn's (unprobed).
+  A `Stop` delayed past a WHOLE later turn finds no working file and can't be ordered (ids are
+  random); it clears at the next prompt. **(3)** the ❓ alert fires from `_reconcile_ws` whenever
+  ❓ becomes visible, so a question hidden behind a co-tenant's ⏳ alerts at `PostCompact`
+  (it used to stay silent, for dialogs too). **(4)** the pid's absence keeps the idle Notification
+  gated out. `tests/bridge-state.sh` M–M6, `tests/amp-bridge.sh`.
+  Precedence: compacting
   > waiting > working > idle. **cmux's `unread` is NOT needs-you** (removed 2026-09-25): the
   notification store fills with passive notices — Claude's idle "waiting for your input", Amp's
   "Finished responding", "Command done", "Agent is ready" — which stay unread until that EXACT tab is
@@ -397,8 +424,11 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
   strand ⚡, clear its own error pill, or emit `Stop`'s misleading finished notification.
   **Coverage is 2-of-3 and the gaps are Amp's:** ⚡ from `agent.start` + `tool.call`, cleared by
   `agent.end`; **⏳ compacting is IMPOSSIBLE** (Amp emits no compaction event — don't fake it); **❓
-  waiting is opt-in** (`CMUX_SENTINEL_AMP_ASK=1`) because Amp doesn't ask permission by default, so
-  there's no blocked-on-user moment to observe — and turning it on CHANGES AMP'S BEHAVIOUR.
+  MID-TURN waiting is opt-in** (`CMUX_SENTINEL_AMP_ASK=1`) because Amp doesn't ask permission by
+  default, so there's no blocked-on-user moment to observe — and turning it on CHANGES AMP'S
+  BEHAVIOUR. A reply that ENDS on a question is ❓ regardless (see the agent-state bullet): it only
+  reads what Amp already said. Caveat: the session pid is the plugin-runtime host, which outlives
+  an abandoned thread, so an ignored Amp question holds ❓ for as long as that amp process lives.
   Under `amp -x`, lifecycle events are SKIPPED unless you pass `--plugin-ready-timeout`.
 - **Usage meters group by provider:** each provider gets its own labelled panel section
   (`CLAUDE USAGE`, `CODEX USAGE`, `AMP USAGE`) — same component reused. A meter is just an idle

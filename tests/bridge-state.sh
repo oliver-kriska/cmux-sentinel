@@ -218,5 +218,103 @@ firet PreToolUse "$PID2" AskUserQuestion; ck "no notifier configured → ❓ unc
 sleep 0.2
 cknote "unset notifier writes nothing" "$([ -e "$NOTED" ] && echo present || echo absent)" "absent"
 
+echo "M: a turn that ENDS on a plain-text question → ❓ until you reply"
+# Stop carrying the agent's final reply (Claude Code's last_assistant_message; the
+# Amp adapter sends the same field). jq builds the JSON so quotes and newlines survive.
+fires() { jq -n --arg m "$3" '{last_assistant_message: $m}' \
+            | CMUX_CLAUDE_PID="$2" bash "$BRIDGE" "$1"; }
+fire Stop "$PID2"; printf 'enaia' > "$ROOT/.title"; rm -rf "$WORKDIR"; rm -f "$NOTED"
+fire PreToolUse "$PID2";                                  ck "working → ⚡"              "⚡enaia"
+fires Stop "$PID2" "Should I continue with the deploy?";  ck "ends on a question → ❓"   "❓enaia"
+# ~60s later Claude sends its idle "waiting for your input" Notification. The turn
+# is over (no pid file), so _notify_waiting ignores it and the ❓ stays put.
+fire Notification "$PID2";                                ck "idle notice keeps ❓"      "❓enaia"
+fire SessionStart "$A";                                   ck "reconcile keeps ❓"        "❓enaia"
+fire UserPromptSubmit "$PID2";                            ck "you reply → ⚡"            "⚡enaia"
+fires Stop "$PID2" "Done. Deployed to staging.";          ck "ends on a statement → idle" "enaia"
+
+fire PreToolUse "$PID2"
+fires Stop "$PID2" "$(printf 'Two options:\n\n**Proceed with A?**\n')"; ck "markdown-wrapped question → ❓" "❓enaia"
+fire UserPromptSubmit "$PID2"
+fires Stop "$PID2" "$(printf 'Was it the cache? Yes.\n\nAll green now.')"; ck "question mid-reply, then a statement → idle" "enaia"
+fire PreToolUse "$PID2"
+fires Stop "$PID2" "$(printf 'Ship it (y/n)?\n\n   \n')"; ck "trailing blank lines ignored → ❓" "❓enaia"
+fire SessionEnd "$PID2";                                  ck "session closed → idle"     "enaia"
+fire PreToolUse "$PID2"
+fires Stop "$PID2" '続けますか？';                          ck "full-width ？ → ❓"         "❓enaia"
+fire UserPromptSubmit "$PID2"; fire Stop "$PID2";         ck "no message field → idle (older agents)" "enaia"
+# Only markdown emphasis is peeled: a `?` inside a code span or quotes ends a statement.
+fire PreToolUse "$PID2"
+# shellcheck disable=SC2016  # literal markdown backticks, not a command substitution
+fires Stop "$PID2" 'Renamed the button to `Continue?`';   ck "code span ending in ? → idle" "enaia"
+fire PreToolUse "$PID2"
+fires Stop "$PID2" 'Renamed it to "Continue?"';           ck "quoted ? → idle"              "enaia"
+
+echo "M2: co-tenants — a text question outranks another session's work"
+fire PreToolUse "$A"; fire PreToolUse "$PID2";            ck "two sessions working → ⚡" "⚡enaia"
+fires Stop "$PID2" "Which branch should I use?";          ck "one asks → ❓"             "❓enaia"
+fires Stop "$A" "Tests pass.";                            ck "the other finishing keeps ❓" "❓enaia"
+fire UserPromptSubmit "$PID2";                            ck "reply → ⚡"                "⚡enaia"
+fire Stop "$PID2";                                        ck "Stop → idle"               "enaia"
+
+echo "M3: a dead session's question is reaped, and the transition alerts once"
+fires Stop 999999 "Anything else?";                       ck "dead pid → idle"           "enaia"
+rm -rf "$WORKDIR"; rm -f "$NOTED"
+# shellcheck disable=SC2016  # $1/$2 belong to the notifier's `sh -c`, not to us
+export CMUX_SENTINEL_NOTIFY_CMD='printf "%s|%s\n" "$1" "$2" >> '"$NOTED"
+fire PreToolUse "$PID2"
+fires Stop "$PID2" "Should I merge it?";                  ck "asks in text → ❓ (notifier armed)" "❓enaia"
+notewait 1
+cknote "notifier fires on the text-question transition" "$(cat "$NOTED" 2>/dev/null)" "enaia|waiting"
+fires Stop "$PID2" "Should I merge it?"
+sleep 0.3
+cknote "already ❓ fires no duplicate" "$(wc -l < "$NOTED" | tr -d ' ')" "1"
+unset CMUX_SENTINEL_NOTIFY_CMD
+fire SessionEnd "$PID2";                                  ck "SessionEnd → idle"         "enaia"
+
+echo "M4: a late Stop from an earlier turn can't end the next one"
+# Hooks are async, so a prompt you queued can start turn 2 before turn 1's Stop
+# runs. prompt_id ties a Stop to its turn; only UserPromptSubmit records it.
+firep() { # $1=event $2=pid $3=prompt_id [$4=last_assistant_message]
+  jq -n --arg id "$3" --arg m "${4-}" \
+    '{prompt_id: $id} + (if $m == "" then {} else {last_assistant_message: $m} end)' \
+    | CMUX_CLAUDE_PID="$2" bash "$BRIDGE" "$1"; }
+rm -rf "$WORKDIR"; printf 'enaia' > "$ROOT/.title"
+firep UserPromptSubmit "$PID2" t1;                        ck "turn 1 → ⚡"               "⚡enaia"
+firep UserPromptSubmit "$PID2" t2;                        ck "queued prompt starts turn 2 first → ⚡" "⚡enaia"
+firep Stop "$PID2" t1 "Should I deploy?";                 ck "turn 1's late question is ignored → ⚡" "⚡enaia"
+firep Stop "$PID2" t1 "Done.";                            ck "turn 1's late statement is ignored → ⚡" "⚡enaia"
+firep Stop "$PID2" t2 "Done.";                            ck "turn 2's own Stop → idle"  "enaia"
+firep UserPromptSubmit "$PID2" t3
+firep PreToolUse "$PID2" sub9                             # a subagent's call, another id
+firep Stop "$PID2" t3 "Done.";                            ck "a subagent's id can't make the turn's Stop stale" "enaia"
+
+echo "M5: background work after a turn-ending question keeps ❓; your prompt clears it"
+firep UserPromptSubmit "$PID2" t4
+firep Stop "$PID2" t4 "Want me to merge it?";             ck "ends on a question → ❓"   "❓enaia"
+fire PreToolUse "$PID2";                                  ck "a background agent's tool call keeps ❓" "❓enaia"
+fire Notification "$PID2";                                ck "so does a permission prompt meanwhile" "❓enaia"
+firep UserPromptSubmit "$PID2" t5;                        ck "your prompt → ⚡"          "⚡enaia"
+firep Stop "$PID2" t5 "Merged.";                          ck "→ idle"                    "enaia"
+# A question DIALOG is still answered by the next tool call, as before.
+firet PreToolUse "$PID2" AskUserQuestion;                 ck "dialog → ❓"               "❓enaia"
+fire PreToolUse "$PID2";                                  ck "next tool call → ⚡"       "⚡enaia"
+fire Stop "$PID2";                                        ck "→ idle"                    "enaia"
+
+echo "M6: a question hidden behind a co-tenant's ⏳ alerts when it surfaces"
+rm -rf "$WORKDIR"; rm -f "$NOTED"; printf 'enaia' > "$ROOT/.title"
+# shellcheck disable=SC2016  # $1/$2 belong to the notifier's `sh -c`, not to us
+export CMUX_SENTINEL_NOTIFY_CMD='printf "%s|%s\n" "$1" "$2" >> '"$NOTED"
+fire PreToolUse "$A"; fire PreCompact "$A";               ck "co-tenant compacting → ⏳" "⏳enaia"
+fire PreToolUse "$PID2"
+fires Stop "$PID2" "Should I merge it?";                  ck "question under ⏳ stays ⏳" "⏳enaia"
+sleep 0.3
+cknote "no alert while hidden" "$([ -e "$NOTED" ] && echo present || echo absent)" "absent"
+fire PostCompact "$A";                                    ck "compaction ends → ❓"      "❓enaia"
+notewait 1
+cknote "alert when ❓ surfaces" "$(cat "$NOTED" 2>/dev/null)" "enaia|waiting"
+unset CMUX_SENTINEL_NOTIFY_CMD
+fire Stop "$A"; fire SessionEnd "$PID2";                  ck "both done → idle"          "enaia"
+
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

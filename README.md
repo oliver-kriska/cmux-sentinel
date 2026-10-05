@@ -53,8 +53,9 @@ mechanisms feed it:
    — so `working` shows with no bridge at all. **(b)** Claude Code hooks or `hooks/amp-bridge.ts` →
    `hooks/cmux-bridge.sh` → a STATIC marker on the
    *active* workspace's **title** (`⚡` working, `⏳` compacting, `❓` waiting-on-you — an agent that
-   asked a question or hit a permission prompt), reference-counted so multiple agents in one
-   workspace don't stomp it and dead sessions can't strand it. Precedence is compacting > waiting >
+   asked a question, hit a permission prompt, or ended its reply on a question), reference-counted
+   so multiple agents in one workspace don't stomp it and dead sessions can't strand it.
+   Precedence is compacting > waiting >
    working. The sidebar detects the marker, colours the row, and strips the glyph for display.
    Agent state stays in the title because it must survive app/process boundaries and be shared by
    co-tenant agents; an animated marker would freeze cmux's title coalescer. The bridge is still
@@ -207,8 +208,10 @@ Code:
 }
 ```
 
-`Notification` drives `❓ waiting-on-you` (permission prompts); `UserPromptSubmit`/`PreToolUse`
-drive `⚡ working`; `PreCompact`/`PostCompact` drive `⏳ compacting`; `Stop`/`SessionEnd` clear it.
+`PreToolUse` on `AskUserQuestion`/`ExitPlanMode` and `Notification` (permission prompts) drive
+`❓ waiting-on-you`, and so does a `Stop` whose reply ends on a question, which holds until your
+next prompt; `UserPromptSubmit`/`PreToolUse` drive `⚡ working`; `PreCompact`/`PostCompact` drive
+`⏳ compacting`; `Stop`/`SessionEnd` clear it.
 
 Markers are reference-counted per workspace and reaped two ways: the session's process dying
 (`kill -0`), and the session going quiet. The second one matters because a turn can end without
@@ -393,8 +396,8 @@ or not, so "why don't I see a spend row" has an answer.
 
 ### Get alerted when an agent needs you (optional)
 
-The sidebar shows ❓ when a session is alive but blocked on you — it asked a question or is
-waiting on a permission. That is the one state worth interrupting you for when you are not
+The sidebar shows ❓ when a session is alive but blocked on you — it asked a question, is
+waiting on a permission, or ended its reply on a question. That is the one state worth interrupting you for when you are not
 looking at cmux, so the bridge can run a command on that transition:
 
 ```bash

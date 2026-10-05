@@ -16,7 +16,8 @@
 #   ⚡  working    — an agent is mid-turn
 #   ⏳  compacting — an agent is compacting its context (PreCompact→PostCompact)
 #   ❓  waiting    — an agent is BLOCKED on you (asked a question / needs a
-#                   permission) and isn't actually running right now
+#                   permission) and isn't actually running right now, OR its
+#                   turn ENDED on a plain-text question (see _stop_asking)
 #
 # Precedence: compacting > waiting > working. Waiting outranks working because a
 # session that asked AskUserQuestion / ExitPlanMode (or hit a MID-TURN permission
@@ -31,9 +32,11 @@
 #
 # MULTIPLE AGENTS per workspace are REFERENCE-COUNTED via per-workspace state
 # files under $WORKROOT/<workspace_id>/:
-#   <pid>              — a live working session (touched each turn; expires, below)
+#   <pid>              — a live working session (touched each turn; expires, below);
+#                        holds the turn id from UserPromptSubmit, see _stale_stop
 #   .compacting.<pid>  — that session is compacting right now
-#   .waiting.<pid>     — that session is blocked on the user right now
+#   .waiting.<pid>     — that session is blocked on the user right now; content
+#                        "stop" = its turn ENDED on a question (only a prompt clears it)
 #   .marked            — fast-path flag: title already carries the ⚡ work marker
 # Dead sessions are reaped by PID liveness (kill -0), so a crashed/zombie agent
 # can't strand a marker. One agent's Stop never clears another's. Codex can reuse
@@ -66,6 +69,14 @@ cmux ping &>/dev/null || exit 0
 
 input=$(cat)
 event="${1:-$(echo "$input" | jq -r '.hook_event_name // "unknown"')}"
+# Which turn a turn START or END belongs to: Claude Code's prompt_id (the same on
+# UserPromptSubmit and Stop of one turn), or the message id the Amp adapter passes
+# from agent.start/agent.end. Empty when the agent sends none. Not read on the hot
+# PreToolUse path, which never records it (see _touch_turn).
+TURN=""
+case "$event" in
+  UserPromptSubmit | Stop) TURN=$(echo "$input" | jq -r '.prompt_id // ""' 2>/dev/null) ;;
+esac
 
 WORKMARK="⚡"
 COMPMARK="⏳"
@@ -87,6 +98,14 @@ LOG_SOURCE="${CMUX_SENTINEL_LOG_SOURCE:-cc}"
 _ws()    { printf '%s' "${CMUX_WORKSPACE_ID:-}"; }
 _sess()  { printf '%s' "${CMUX_SENTINEL_SESSION_PID:-${CMUX_CLAUDE_PID:-$PPID}}"; }
 _alive() { kill -0 "$1" 2>/dev/null; }
+# Create/refresh a session's working file. A turn START also records which turn
+# it is (for _stale_stop). Every other event only refreshes the mtime and keeps
+# that id: subagent and background-agent tool calls fire this session's hooks too,
+# and may carry another turn's id.
+_touch_turn() {
+  if [ "$event" = UserPromptSubmit ] && [ -n "$TURN" ]; then printf '%s' "$TURN" > "$1"
+  else touch "$1"; fi
+}
 
 # mtime of $1 in epoch seconds, or FAIL when it can't be read. stat: GNU (-c)
 # first, then BSD/macOS (-f) — runtime is macOS but the offline harness runs on
@@ -188,6 +207,11 @@ _reconcile_ws() {
   [ "$t" = "$want" ] || cmux rename-workspace --workspace "$ws" "$want" &>/dev/null
   if [ "$desired" = "$WORKMARK" ]; then : > "$dir/.marked"; else rm -f "$dir/.marked"; fi
   [ -n "$desired" ] || rmdir "$dir" 2>/dev/null
+  # ❓ just became visible: a question that ended a turn, or one that was hidden
+  # behind a co-tenant's ⏳ until its PostCompact. Same alert as _set_waiting.
+  if [ "$desired" = "$WAITMARK" ]; then
+    case "$t" in "$WAITMARK"*) : ;; *) _notify waiting "$(_strip_marks "$t")" ;; esac
+  fi
 }
 
 # Mark THIS session working (hot path: the .marked flag skips the title read on
@@ -197,8 +221,13 @@ _reconcile_ws() {
 _set_working() {
   local ws sess dir t; ws=$(_ws); [ -n "$ws" ] || return 0
   sess=$(_sess); dir="$WORKROOT/$ws"
-  mkdir -p "$dir" 2>/dev/null; : > "$dir/$sess"
-  rm -f "$dir/.waiting.$sess"                           # this session resumed → not waiting
+  mkdir -p "$dir" 2>/dev/null; _touch_turn "$dir/$sess"
+  # This session resumed → not waiting. Except after a turn that ENDED on a
+  # question (a non-empty flag, see _stop_asking): only your next prompt answers
+  # that, not a background agent's tool call.
+  if [ "$event" = UserPromptSubmit ] || [ ! -s "$dir/.waiting.$sess" ]; then
+    rm -f "$dir/.waiting.$sess"
+  fi
   _marked_fresh "$dir" && return 0                     # hot path: trust a fresh flag
   t=$(_title_of "$ws"); [ -n "$t" ] || return 0
   case "$t" in "$COMPMARK"*) return 0 ;; esac          # compacting wins; recorded the pid
@@ -218,8 +247,10 @@ _set_working() {
 # rejected (see CLAUDE.md). So there is deliberately no notification for any other
 # transition; adding one would make the alert ignorable, which costs you the ❓.
 #
-# Fires from _set_waiting AFTER its already-waiting guard, so you get exactly one
-# alert per transition into ❓, not one per hook event.
+# Fires from _set_waiting AFTER its already-waiting guard, and from _reconcile_ws
+# when ❓ becomes visible there (a turn that ended on a question, or one hidden
+# behind a co-tenant's ⏳ until PostCompact), so you get exactly one alert per
+# transition into ❓, not one per hook event.
 #
 # Contract: CMUX_SENTINEL_NOTIFY_CMD runs via `sh -c` with the workspace label as
 # $1 and the event as $2, and CMUX_SENTINEL_WORKSPACE / _EVENT in the environment.
@@ -245,8 +276,8 @@ _set_waiting() {
   local ws sess dir t; ws=$(_ws); [ -n "$ws" ] || return 0
   sess=$(_sess); dir="$WORKROOT/$ws"
   mkdir -p "$dir" 2>/dev/null
-  : > "$dir/$sess"                                      # session is alive…
-  : > "$dir/.waiting.$sess"                             # …but parked on the user
+  _touch_turn "$dir/$sess"                              # session is alive…
+  [ -s "$dir/.waiting.$sess" ] || : > "$dir/.waiting.$sess"  # …but parked on the user
   rm -f "$dir/.marked"                                  # ⚡ fast-path no longer valid
   t=$(_title_of "$ws"); [ -n "$t" ] || return 0
   case "$t" in "$COMPMARK"* | "$WAITMARK"*) return 0 ;; esac  # compacting wins; already waiting
@@ -292,6 +323,56 @@ _clear_working() {
   local ws sess; ws=$(_ws); [ -n "$ws" ] || return 0
   sess=$(_sess)
   rm -f "$WORKROOT/$ws/$sess" "$WORKROOT/$ws/.waiting.$sess" "$WORKROOT/$ws/.marked" 2>/dev/null
+  _reconcile_ws "$ws"
+}
+
+# True when the agent's final message ends on a question. Only the LAST non-blank
+# line counts, so a question mid-reply that is then answered stays idle. Only
+# markdown emphasis is peeled (`**Proceed?**`); quotes, code spans and brackets are
+# NOT, because "Renamed it to `Continue?`" is a statement. A statement whose last
+# line still ends in `?` is a false positive we accept. Only ASCII is stripped and
+# `${s%?}` drops one char, so the loop is locale-safe; the full-width `？` is
+# matched as a literal suffix for the same reason.
+_ends_with_question() {
+  local s
+  s=$(printf '%s\n' "$1" | awk 'NF { last = $0 } END { print last }')
+  while :; do
+    case "$s" in
+      *[[:space:]] | *'*' | *_) s="${s%?}" ;;
+      *) break ;;
+    esac
+  done
+  case "$s" in *'?' | *'？') return 0 ;; esac
+  return 1
+}
+
+# A Stop that arrives AFTER this session's next turn already started (async hooks
+# can reorder; a prompt you queued starts the next turn within milliseconds) must
+# not end that turn. The session's working file names the turn it belongs to, so
+# a Stop for a different turn is stale. A Stop delayed past the whole next turn
+# finds no working file and can't be ordered — turn ids are random — so it still
+# applies; that worst case clears at your next prompt.
+_stale_stop() {
+  local ws f cur; ws=$(_ws); [ -n "$ws" ] && [ -n "$TURN" ] || return 1
+  f="$WORKROOT/$ws/$(_sess)"
+  [ -f "$f" ] || return 1
+  cur=$(cat "$f" 2>/dev/null)
+  [ -n "$cur" ] && [ "$cur" != "$TURN" ]
+}
+
+# This session's turn ENDED on a plain-text question ("Should I deploy it?").
+# Agents often ask this way instead of through AskUserQuestion, so it is treated
+# as waiting on you and gets the same ❓. The turn IS over, so the working file
+# goes (that also keeps the idle Notification ~60s later gated out by
+# _notify_waiting). The waiting flag stays until UserPromptSubmit, SessionEnd or
+# the session dying clears it — no TTL, for the reason in the header. The ❓ alert
+# comes from _reconcile_ws, once, when the marker becomes visible.
+_stop_asking() {
+  local ws sess dir; ws=$(_ws); [ -n "$ws" ] || return 0
+  sess=$(_sess); dir="$WORKROOT/$ws"
+  mkdir -p "$dir" 2>/dev/null
+  rm -f "$dir/$sess" "$dir/.marked" 2>/dev/null         # the turn is over…
+  printf stop > "$dir/.waiting.$sess"                   # …but it ended on you
   _reconcile_ws "$ws"
 }
 
@@ -351,7 +432,15 @@ case "$event" in
     ;;
 
   Stop)
-    _clear_working
+    # Claude Code sends the final reply as last_assistant_message (seen on 2.1.289); Amp
+    # passes its last text block. Absent (older agents) → plain idle, as before.
+    if _stale_stop; then
+      : # a later turn of this session already started; leave its state alone
+    elif _ends_with_question "$(echo "$input" | jq -r '.last_assistant_message // ""')"; then
+      _stop_asking
+    else
+      _clear_working
+    fi
     cmux notify --title "$AGENT_LABEL" --body "Finished responding" &>/dev/null
     cmux log --level success --source "$LOG_SOURCE" -- "Response complete" &>/dev/null
     ;;

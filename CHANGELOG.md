@@ -20,6 +20,17 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
 
 ### Fixed
 
+- **A workspace whose agent ends its reply with a question now shows "asking…".** Agents often
+  ask in plain text at the end of a turn ("Should I deploy it?") instead of through a question
+  dialog, and those rows went quiet as if the work were finished. The row now stays amber
+  "asking…" until you send your next prompt or close that session, for Claude Code and Amp alike.
+  Background agents still working in that session don't clear it. Only the reply's last line
+  counts, so a question in the middle of an answer doesn't trigger it, and neither does a `?`
+  inside quotes or code (`Renamed it to "Continue?"`). A statement that happens to end in `?`
+  still does. `CMUX_SENTINEL_NOTIFY_CMD`, if you set it, fires for these too.
+- **The "needs you" alert no longer stays silent for a question that arrives while another agent
+  in the same workspace is compacting.** The row turned amber once compaction finished, but
+  `CMUX_SENTINEL_NOTIFY_CMD` never ran. It now runs when the amber row appears.
 - **Poller errors now carry a UTC timestamp, and the doctor no longer blames an error that
   predates a later successful refresh.** Undated errors from older versions still show, marked
   "time unknown".

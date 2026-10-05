@@ -145,6 +145,54 @@ run_adapter "$ROOT/bin/new-bridge" "$NEW_EVENTS"
 for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$NEW_EVENTS" ] && break; sleep 0.1; done
 is "new bridge gets one atomic terminal-error event" "$(cat "$NEW_EVENTS")" "StopFailureFinal"
 
+# agent.end(done) hands the bridge the turn's final text, so a reply that ends on a
+# question can show ❓. Run the real handler and capture the exact stdin payload.
+cat > "$ROOT/adapter-end.mjs" <<'JS'
+const handlers = new Map()
+const { default: install } = await import(process.env.PLUGIN_URL)
+install({ on: (event, handler) => handlers.set(event, handler) })
+handlers.get(process.env.HANDLER || "agent.end")(JSON.parse(process.env.END_EVENT))
+JS
+cat > "$ROOT/bin/payload-bridge" <<'SH'
+#!/bin/bash
+if [ "${1:-}" = "--capabilities" ]; then printf '%s\n' "protocol=2 stop-failure-final"; exit 0; fi
+cat > "$ADAPTER_PAYLOAD.tmp" && mv "$ADAPTER_PAYLOAD.tmp" "$ADAPTER_PAYLOAD"
+SH
+chmod +x "$ROOT/bin/payload-bridge"
+end_payload() { # $1=event JSON [$2=handler, default agent.end] → the payload the bridge received
+  local out="$ROOT/end-payload"; rm -f "$out"
+  PLUGIN_URL="file://$PLUGIN_MJS" CMUX_SENTINEL_BRIDGE="$ROOT/bin/payload-bridge" \
+    CMUX_WORKSPACE_ID="$WS" ADAPTER_PAYLOAD="$out" END_EVENT="$1" HANDLER="${2:-agent.end}" \
+    node "$ROOT/adapter-end.mjs"
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$out" ] && break; sleep 0.1; done
+  cat "$out" 2>/dev/null
+}
+DONE_EVENT='{"status":"done","id":"m-7","messages":[
+  {"role":"assistant","content":[{"type":"text","text":"An earlier turn?"}]},
+  {"role":"user","content":[{"type":"text","text":"go"}]},
+  {"role":"assistant","content":[{"type":"text","text":"Built it."},
+    {"type":"tool_use","id":"t1","name":"Bash","input":{}},
+    {"type":"text","text":"Should I deploy?"},{"type":"thinking","thinking":"hm"}]}]}'
+p="$(end_payload "$DONE_EVENT")"
+is "agent.end(done) → Stop" "$(printf '%s' "$p" | jq -r .hook_event_name)" "Stop"
+is "…carrying the last text block of the last assistant message" \
+  "$(printf '%s' "$p" | jq -r .last_assistant_message)" "Should I deploy?"
+is "…and the turn id, so a late Stop can be told apart" "$(printf '%s' "$p" | jq -r .prompt_id)" "m-7"
+p="$(end_payload '{"message":"go","id":"m-7"}' agent.start)"
+is "agent.start → UserPromptSubmit with the same turn id" \
+  "$(printf '%s' "$p" | jq -r '.hook_event_name + " " + .prompt_id')" "UserPromptSubmit m-7"
+p="$(end_payload '{"status":"done","messages":[{"role":"assistant","content":[
+  {"type":"text","text":"Should I deploy?"},{"type":"text","text":"\n\n"},{"type":"text","text":""}]}]}')"
+is "trailing blank text blocks are skipped" "$(printf '%s' "$p" | jq -r .last_assistant_message)" "Should I deploy?"
+p="$(end_payload '{"status":"done","messages":[{"role":"assistant","content":[{"type":"text","text":"  "}]}]}')"
+is "only blank text → empty message" "$(printf '%s' "$p" | jq -r .last_assistant_message)" ""
+p="$(end_payload '{"status":"cancelled","messages":[{"role":"assistant","content":[{"type":"text","text":"Deploy?"}]}]}')"
+is "agent.end(cancelled) sends no message (you are at the keyboard)" \
+  "$(printf '%s' "$p" | jq -r 'has("last_assistant_message")')" "false"
+p="$(end_payload '{"status":"done"}')"
+is "agent.end(done) without messages → empty message, not a crash" \
+  "$(printf '%s' "$p" | jq -r .last_assistant_message)" ""
+
 # ── turn lifecycle ────────────────────────────────────────────────────────
 amp_event UserPromptSubmit "$LIVE"
 is "agent.start → ⚡ working" "$(title)" "⚡workspace"
@@ -174,6 +222,15 @@ amp_event PreToolUse "$LIVE" '{"tool_name":"Bash"}'
 is "…answered → back to ⚡" "$(title)" "⚡workspace"
 amp_event Stop "$LIVE"
 is "…then idle" "$(title)" "workspace"
+
+# ── a reply that ends on a question → ❓ until the next agent.start ───────
+amp_event UserPromptSubmit "$LIVE"
+amp_event Stop "$LIVE" '{"last_assistant_message":"Should I deploy?"}'
+is "agent.end on a question → ❓" "$(title)" "❓workspace"
+amp_event UserPromptSubmit "$LIVE"
+is "…next agent.start → ⚡" "$(title)" "⚡workspace"
+amp_event Stop "$LIVE" '{"last_assistant_message":"Deployed."}'
+is "…a statement → idle" "$(title)" "workspace"
 
 # ── CO-TENANCY: the reason the plugin shells out at all ──────────────────
 # Amp and Claude Code in ONE workspace, each with its own session pid. Neither

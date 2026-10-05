@@ -25,7 +25,10 @@
 //   ⚡ working — agent.start (turn begins) + tool.call (keeps the marker fresh)
 //   (clear)   — agent.end, whatever the outcome (done | error | cancelled)
 //   ⏳ compacting — IMPOSSIBLE: Amp emits no compaction event. Not faked.
-//   ❓ waiting — OPT-IN, off by default. Amp does not ask permission by default
+//   ❓ asked in text — agent.end(done) passes the final reply; when it ends on a
+//     question the bridge keeps ❓ until the next agent.start. Always on: it only
+//     reads what Amp already said and changes nothing about how Amp behaves.
+//   ❓ waiting mid-turn — OPT-IN, off by default. Amp does not ask permission by default
 //     ("By default, Amp does not ask for approval before running tools"), so
 //     there is no blocked-on-user moment to observe. Set CMUX_SENTINEL_AMP_ASK=1
 //     and the tool.call handler marks ❓ around tools listed in
@@ -127,6 +130,36 @@ function driveSync(event, payload = {}) {
   } catch (_) {}
 }
 
+// The turn's id: agent.start and agent.end both carry the id of the message that
+// started the turn. The bridge uses it to ignore a Stop that arrives after the
+// next turn already began (detached spawns can reorder).
+function turnId(event) {
+  return typeof event?.id === "string" ? event.id : ""
+}
+
+// The last non-blank text block of the turn's last assistant message, or "".
+// agent.end carries the turn's messages; content is an array of blocks (text,
+// thinking, tool_use), or a bare string. A trailing whitespace-only block is
+// skipped, or it would hide the question before it. Only the tail is sent — the
+// bridge reads just the final line, and this rides a pipe on every turn end.
+function lastAssistantText(event) {
+  const messages = Array.isArray(event?.messages) ? event.messages : []
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m?.role !== "assistant") continue
+    if (typeof m.content === "string") return m.content.slice(-2000)
+    const blocks = Array.isArray(m.content) ? m.content : []
+    for (let j = blocks.length - 1; j >= 0; j--) {
+      const b = blocks[j]
+      if (b?.type === "text" && typeof b.text === "string" && b.text.trim() !== "") {
+        return b.text.slice(-2000)
+      }
+    }
+    return ""
+  }
+  return ""
+}
+
 // ── opt-in ❓ waiting ──────────────────────────────────────────────────────
 const ASK_ENABLED = process.env.CMUX_SENTINEL_AMP_ASK === "1"
 const ASK_TOOLS = (process.env.CMUX_SENTINEL_AMP_ASK_TOOLS || "Bash")
@@ -142,7 +175,10 @@ export default function (amp) {
   })
 
   amp.on("agent.start", (event) => {
-    drive("UserPromptSubmit", { prompt: typeof event?.message === "string" ? event.message : "" })
+    drive("UserPromptSubmit", {
+      prompt: typeof event?.message === "string" ? event.message : "",
+      prompt_id: turnId(event),
+    })
   })
 
   amp.on("tool.call", async (event, ctx) => {
@@ -188,7 +224,11 @@ export default function (amp) {
       }
       return
     }
-    // done | cancelled — both mean this turn is over and the row goes idle.
-    drive("Stop", {})
+    // done | cancelled — both mean this turn is over. A finished turn hands the
+    // bridge its final text, so a reply that ends on a question shows ❓ until you
+    // answer. A cancelled turn sends none: you are already at the keyboard.
+    drive("Stop", status === "done"
+      ? { prompt_id: turnId(event), last_assistant_message: lastAssistantText(event) }
+      : { prompt_id: turnId(event) })
   })
 }
