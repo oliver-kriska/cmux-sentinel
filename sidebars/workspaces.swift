@@ -3,9 +3,11 @@
 //   bg #1F2430 · fg #D9D7CE · dim #8A9199 · orange #FFCC66 · blue #73D0FF
 //   green #87D96C · red #F28779 · selection #33415E
 //
-// State is modeled as TWO INDEPENDENT dimensions, each on its own row:
+// A row is ONE line at rest; an activity line appears under the title only while
+// an agent is working, compacting or asking (a selected title can still wrap).
+// State is modeled as TWO INDEPENDENT dimensions:
 //   1. Agent activity — compacting (purple) / working (green) / needs-you
-//      (orange) / idle (dim). Compacting, waiting & working are read from STATIC
+//      (orange), on its own activity line; idle draws nothing. Compacting, waiting & working are read from STATIC
 //      markers the bridge keeps at the FRONT of the TITLE ("⏳"=compacting,
 //      "❓"=waiting-on-you, "⚡"=working). `unread` is NOT needs-you: cmux's
 //      notification store fills with passive "Finished responding" / idle
@@ -17,27 +19,26 @@
 //      green "Working…", because the session is parked on YOU.
 //      (Why the title and not `progress` for agent state: the title is the
 //      persistent, restart-proof anchor and encodes the marker-precedence order;
-//      `progress` DOES reach the sidebar on 0.64.17 — meters use it — but it's
-//      transient. Why STATIC: an animated marker in the title freezes cmux's
+//      `progress` DOES reach the sidebar on 0.64.17 (the pollers write it) — but
+//      it's transient. Why STATIC: an animated marker in the title freezes cmux's
 //      sidebar — upstream #6291. The bridge ref-counts agents per workspace so
 //      multiple Claude/Codex sessions don't stomp the marker — see
 //      .claude/STATE-ARCHITECTURE.md.)
-//   2. Repo state — branch · uncommitted · PR. Independent of any agent; its
-//      own row so it never competes with activity for the line.
+//   2. Repo state — uncommitted changes, as a yellow "*" right after the title
+//      (the native "main*" look). Independent of any agent. Branch and PR names
+//      are not shown: a name on every git row would add a line to most rows.
 // Usage meters ride hidden "sentinel" workspaces (see isUsageMeter).
 
 // ── predicates ────────────────────────────────────────────────────
-func hasPR(_ w) -> Bool {
-  return w.pr != nil && w.pr.label != nil && w.pr.label != ""
-}
-func hasBranch(_ w) -> Bool {
-  return w.branch != nil && w.branch != ""
-}
+// NEVER compare with the nil literal: `x != nil` / `x == nil` are falsy for a
+// SET string, dictionary or number on this interpreter (render-probed 2026-10-01),
+// which silently hid every branch, PR and progress value. Probe presence by shape:
+// `.count > 0` on a string or array, `>= 0` on a number, `== true` on a Bool.
 func hasProgress(_ w) -> Bool {
-  return w.progress != nil && w.progress.value != nil
+  return w.progress.value >= 0
 }
 func hasProgressLabel(_ w) -> Bool {
-  return hasProgress(w) && w.progress.label != nil && w.progress.label != ""
+  return hasProgress(w) && w.progress.label.count > 0
 }
 
 // ── dimension 1: agent activity ───────────────────────────────────
@@ -49,7 +50,7 @@ func hasProgressLabel(_ w) -> Bool {
 //      cmux hooks — Codex, opencode, pi, cursor… — with no adapter of ours. On an
 //      older cmux the field is simply absent and only the markers count.
 // TRAP: `w.agents != nil` is ALWAYS false on this interpreter, even with agents
-// present (arrays don't compare to nil; dictionaries like `w.pr` do). Guard with
+// present (no nil comparison works, on any type — see the predicates). Guard with
 // `.count > 0`, which is false for an absent array. Also: `var` mutation and
 // `return` inside a `for` loop silently do nothing here — use `.filter { }`, whose
 // closures DO capture outer names. All probed 2026-09-15.
@@ -58,9 +59,25 @@ func hasProgressLabel(_ w) -> Bool {
 // reads "working" forever. Same reasoning and the same default as the bridge's
 // CMUX_SENTINEL_WORK_TTL; `lastActivityAt` advances on every hook event, so only a
 // single tool call running past an hour could be dropped early.
+// Native `working` is NOT trusted for the two kinds the bridge covers. Measured
+// 2026-10-01 in ~/.cmuxterm: every Amp record sat at `running` with a prompt depth
+// that only ever climbs (597, 84, 37, 7…) because cmux's Amp plugin misses most turn
+// ends, and Claude records whose Stop carried `hadPendingBackgroundWorkAtStop` stayed
+// `running` after the turn ended. Both showed idle workspaces as "Working…" for up to
+// the hour above. For Claude and Amp the bridge's ⚡ is exact (it ref-counts live
+// turns), so it alone decides; native state lights up only the agents it can't see.
+func nativeWorkingCount(_ w) -> Int {
+  if w.agents.count > 0 {
+    return w.agents.filter { $0.status == "working" && clock.epoch - $0.lastActivityAt < 3600 && $0.kind != "claude" && $0.kind != "amp" }.count
+  }
+  return 0
+}
+// The ×N decoration only. Shown when the row is already working, so a stale record
+// can raise the count but never invent the state. Amp is left out: its depth leak
+// would turn every Amp workspace into ×2.
 func workingAgentCount(_ w) -> Int {
   if w.agents.count > 0 {
-    return w.agents.filter { $0.status == "working" && clock.epoch - $0.lastActivityAt < 3600 }.count
+    return w.agents.filter { $0.status == "working" && clock.epoch - $0.lastActivityAt < 3600 && $0.kind != "amp" }.count
   }
   return 0
 }
@@ -77,11 +94,12 @@ func agentNeedsInput(_ w) -> Bool {
   }
   return false
 }
-// "Working" = the bridge's ⚡ marker OR a live native agent. The interpreter's
-// `.hasPrefix` works here (proven), so the marker is detected on the title.
+// "Working" = the bridge's ⚡ marker OR a live native agent of a kind the bridge
+// doesn't cover. The interpreter's `.hasPrefix` works here (proven), so the marker
+// is detected on the title.
 func isWorking(_ w) -> Bool {
   if w.title.hasPrefix("⚡") { return true }
-  return workingAgentCount(w) > 0
+  return nativeWorkingCount(w) > 0
 }
 // Compacting is a distinct busy sub-state: the bridge swaps the working marker
 // for "⏳" while Claude compacts its context (PreCompact→PostCompact). Static
@@ -90,9 +108,11 @@ func isWorking(_ w) -> Bool {
 func isCompacting(_ w) -> Bool {
   return w.title.hasPrefix("⏳")
 }
-// Waiting: the bridge flips the marker to "❓" when Claude is BLOCKED on you —
-// it asked a question (AskUserQuestion / ExitPlanMode) or hit a permission/idle
-// prompt. The session is alive but parked, so this beats "working" and rides the
+// Waiting: the bridge flips the marker to "❓" when an agent is BLOCKED on you —
+// it asked a question (AskUserQuestion / ExitPlanMode), hit a permission prompt, or
+// ended its turn on a question in plain text (held until you reply). The idle
+// notice after a finished turn does NOT count; the bridge gates it out.
+// The session is alive but parked, so this beats "working" and rides the
 // orange needs-you treatment. Markers are mutually exclusive (one leading glyph),
 // so isWaiting ⇒ !isWorking && !isCompacting — for the MARKER. A native non-Claude
 // agent asking for approval counts too (see agentNeedsInput), and waiting outranks
@@ -110,6 +130,17 @@ func isWaiting(_ w) -> Bool {
 func needsYou(_ w) -> Bool {
   if isCompacting(w) { return false }
   return isWaiting(w)
+}
+// The working state a row actually DISPLAYS, after precedence. Since cmux 0.64.23
+// `isWorking` and `isWaiting` can both hold: a ❓ title next to a co-tenant agent that
+// cmux reports working (or a native record still inside the 1h TTL). The text already
+// said "asking…" there, but colour, accent bar and the header ⚡ count used raw
+// `isWorking`, so the row read "asking…" in working-green and was counted as working.
+// Every visual that ranks states goes through this so text, colour and counts agree.
+func showsWorking(_ w) -> Bool {
+  if isCompacting(w) { return false }
+  if needsYou(w) { return false }
+  return isWorking(w)
 }
 // Show working by COLOR, not the glyph: strip the leading "⚡" marker from the
 // displayed title. `.split` keeps the rest of the name intact (spaces and all);
@@ -154,14 +185,14 @@ func workLabel(_ w) -> String {
 }
 func activityText(_ w) -> String {
   if isCompacting(w) { return "Compacting…" }
-  if isWaiting(w) { return "asking…" }   // Claude asked a question / needs permission
+  if isWaiting(w) { return "asking…" }   // asked, needs permission, or ended on a question
   if isWorking(w) { return workLabel(w) }
-  return "idle"
+  return ""   // unreachable: showsActivity hides the line at rest
 }
 func activityColor(_ w) -> String {
   if isCompacting(w) { return "#DFBFFF" }
-  if isWorking(w) { return "#87D96C" }
   if needsYou(w) { return "#FFCC66" }
+  if showsWorking(w) { return "#87D96C" }
   return "#8A9199"
 }
 // SF Symbol for the activity row; "" = no icon (compared with == elsewhere).
@@ -170,15 +201,14 @@ func activityIcon(_ w) -> String {
   if needsYou(w) { return "bell.fill" }
   return ""
 }
-// Idle repo rows already communicate useful state below the title; repeating
-// literal "idle" makes the list taller without adding information. Keep it only
-// for empty rows, while all actionable/active states always get an activity line.
+// The second line is the signal: it exists only while an agent is compacting,
+// working or waiting on you. A literal "idle" on every resting row repeated the
+// same word down the list without telling you anything (approved 2026-10-02).
 func showsActivity(_ w) -> Bool {
   if isCompacting(w) { return true }
   if isWorking(w) { return true }
   if needsYou(w) { return true }
-  if hasRepoInfo(w) { return false }
-  return true
+  return false
 }
 func titleLineLimit(_ w) -> Int {
   if w.selected { return 2 }
@@ -188,29 +218,6 @@ func titleLineLimit(_ w) -> Int {
   return 1
 }
 
-// ── dimension 2: repo / git state ─────────────────────────────────
-func hasRepoInfo(_ w) -> Bool {
-  if hasPR(w) { return true }
-  if hasBranch(w) { return true }
-  if w.dirty == true { return true }
-  return false
-}
-// Dirty is shown as a compact yellow "*" in the row (native "main*" look), NOT
-// spelled out — "uncommitted changes" truncates and eats the narrow line. So
-// repoText carries only branch / PR label (+ stale); the "*" is appended below.
-func repoText(_ w) -> String {
-  if hasPR(w) {
-    let stale = w.pr.stale == true ? " · stale" : ""
-    return "\(w.pr.label)\(stale)"
-  }
-  if hasBranch(w) { return w.branch }
-  return ""   // dirty-only row: just the branch icon + the yellow "*"
-}
-// Branch / PR label colour. Dirty no longer tints this (the yellow "*" carries it).
-func repoColor(_ w) -> String {
-  if hasPR(w) && w.pr.status == "open" { return "#73D0FF" }
-  return "#8A9199"
-}
 // ── usage meters (hidden sentinels) ───────────────────────────────
 // ONE predicate per provider, matched by the sentinel's TITLE LABEL (not a
 // workspace id). 0.64.15 removed stable workspace UUIDs, leaving only a positional
@@ -288,14 +295,13 @@ func isUsageMeter(_ w) -> Bool {
   return false
 }
 
-// ── native meter row (progress channel) ───────────────────────────
-// The poller writes each sentinel's utilization via `set-progress` (value 0..1 +
-// a clean label), which cmux 0.64.17 passes to the interpreter (null-until-set —
-// see .claude/research/2026-07-06-conductor-sidebar-analysis.md). So a meter is a
-// NATIVE ProgressView, not a unicode-block bar baked into the title. The title
-// stays the anchor (isClaudeMeter/resolve_ref) AND the fallback shown here
-// whenever progress is absent (bootstrap, offline-cleared, a dropped write, or
-// the first poll after an app restart).
+// ── meter row (title channel) ─────────────────────────────────────
+// The poller writes BOTH channels every run: the title (`<anchor> |<detail>|<bar>`)
+// and `set-progress` (value 0..1 + label). The row renders the TITLE only. The
+// interpreter's ProgressView prints its raw value ("0.09") above the bar and
+// `.tint` colours that text instead of the fill (probed 2026-10-01), and reading
+// one channel means a dropped write on the other can never show a mixed reading.
+// The title also stays the anchor (isClaudeMeter/resolve_ref).
 func meterWindow(_ w) -> String {   // human label; title anchor remains unchanged
   if w.title == "5h" { return "session" }
   if w.title.hasPrefix("5h ") { return "session" }
@@ -332,13 +338,6 @@ func meterWindow(_ w) -> String {   // human label; title anchor remains unchang
   // that is exactly the bug this line is meant to make obvious rather than hide.
   return "usage"
 }
-func meterTint(_ w) -> String {     // color-from-data: red ≥90%, amber ≥70%, else blue
-  if hasProgress(w) {
-    if w.progress.value >= 0.9 { return "#F28779" }
-    if w.progress.value >= 0.7 { return "#FFCC66" }
-  }
-  return "#73D0FF"
-}
 // Poller title fallback protocol: "<anchor> |<detail>|<unicode bar>". The space
 // before the first delimiter preserves every existing "<label> " identity match;
 // the single-character split avoids provider-specific prefix parsing entirely.
@@ -359,34 +358,70 @@ func meterFallbackBar(_ w) -> String {
   if parts.count > 2 { return String(parts[2]) }
   return ""
 }
+// ── meter hover text ──────────────────────────────────────────────
+// Built ONLY from the title's |detail| segment, so it can never claim more than
+// the row shows. Fresh: "84% (2h 29m) 🟡". Stale grace: "78% · 1h 5m old 🟡" (the
+// countdown is replaced by the age). Spend: "12% (€6.00 of €50.00)". Amp: "99%
+// (17d)" or "99% (?)" when the renewal didn't parse. Anything without a "%"
+// ("waiting…", "⚠ rate limit", "n/a") is no reading at all and is shown as-is.
+// Plain-string helpers (title, row name, detail) so the wording can be checked
+// against fixture strings without creating fake meter workspaces.
+func meterScope(_ t: String, _ name: String) -> String {
+  if t.hasPrefix("5h ") { return "5-hour session limit" }
+  if t.hasPrefix("cx5h ") { return "5-hour session limit" }
+  if t.hasPrefix("7d ") { return "weekly limit" }
+  if t.hasPrefix("cx7d ") { return "weekly limit" }
+  if t.hasPrefix("m7d ") { return "weekly \(name) limit" }
+  if t.hasPrefix("ampu ") { return "monthly Amp allowance" }
+  if t.hasPrefix("ampo ") { return "monthly orb allowance" }
+  if t.hasPrefix("spend ") { return "extra-usage budget" }
+  return "limit"
+}
+// The poller appends a severity dot (" 🟡"/" 🔴") to the detail; it is colour, not text.
+func noDot(_ s: String) -> String {
+  let a = String(s.split(separator: "🟡")[0])
+  return String(a.split(separator: "🔴")[0])
+}
+func meterHelpText(_ t: String, _ name: String, _ d: String) -> String {
+  if !d.contains("%") {
+    if d == "n/a" { return "\(name): not reported for this account right now" }
+    return "\(name): \(d) — no current reading"
+  }
+  let pct = String(d.split(separator: " ")[0])
+  let used = "\(pct) of the \(meterScope(t, name)) used"
+  if d.contains(" old") {
+    let parts = d.split(separator: "·")
+    if parts.count > 1 { return "\(used) at the last good reading,\(noDot(String(parts[1])))" }
+    return "\(used) at the last good reading"
+  }
+  if !d.contains("(") { return used }
+  let paren = String(String(d.split(separator: "(")[1]).split(separator: ")")[0])
+  if t.hasPrefix("spend ") { return "\(used) (\(paren))" }
+  if t.hasPrefix("amp") {
+    if paren == "?" { return "\(used) · renewal date unknown" }
+    return "\(used) · renews in \(paren)"
+  }
+  if paren == "?" { return "\(used) · reset time unknown" }
+  return "\(used) · resets in \(paren)"
+}
+func meterHelp(_ w) -> String {
+  return meterHelpText(w.title, meterWindow(w), meterFallbackDetail(w))
+}
 func meterRow(_ w) -> some View {
   VStack(alignment: .leading, spacing: 3) {
-    if hasProgress(w) {
-      HStack(spacing: 6) {
-        Text(meterWindow(w))
-          .font(.system(size: 12, design: .monospaced)).foregroundColor("#CCCAC2")
-        Spacer()
-        if hasProgressLabel(w) {
-          Text(w.progress.label)
-            .font(.system(size: 11, design: .monospaced)).foregroundColor("#8A9199")
-            .lineLimit(1).truncationMode(.tail).multilineTextAlignment(.trailing)
-        }
-      }
-      ProgressView(value: w.progress.value).tint(meterTint(w))
-    } else {
-      HStack(spacing: 6) {
-        Text(meterWindow(w))
-          .font(.system(size: 12, design: .monospaced)).foregroundColor("#CCCAC2")
-        Spacer()
-        Text(meterFallbackDetail(w))
-          .font(.system(size: 11, design: .monospaced)).foregroundColor("#8A9199")
-          .lineLimit(1).truncationMode(.tail).multilineTextAlignment(.trailing)
-      }
-      if meterFallbackBar(w) != "" {
-        Text(meterFallbackBar(w))
-          .font(.system(size: 11, design: .monospaced)).foregroundColor("#73D0FF")
-          .lineLimit(1)
-      }
+    HStack(spacing: 6) {
+      Text(meterWindow(w))
+        .font(.system(size: 12, design: .monospaced)).foregroundColor("#CCCAC2")
+      Spacer()
+      Text(meterFallbackDetail(w))
+        .font(.system(size: 11, design: .monospaced)).foregroundColor("#8A9199")
+        .lineLimit(1).truncationMode(.tail).multilineTextAlignment(.trailing)
+        .help(meterHelp(w))
+    }
+    if meterFallbackBar(w) != "" {
+      Text(meterFallbackBar(w))
+        .font(.system(size: 11, design: .monospaced)).foregroundColor("#73D0FF")
+        .lineLimit(1)
     }
   }
 }
@@ -433,8 +468,8 @@ func shortcutLabel(_ w) -> String {
 // ── row visuals ───────────────────────────────────────────────────
 func accentColor(_ w) -> String {
   if isCompacting(w) { return "#DFBFFF" }
-  if isWorking(w) { return "#87D96C" }
   if needsYou(w) { return "#FFCC66" }
+  if showsWorking(w) { return "#87D96C" }
   return "#73D0FF"
 }
 func accentOpacity(_ w) -> Double {
@@ -462,6 +497,11 @@ func closeColor(_ w) -> String {
   return "#A7AFBD"
 }
 
+// Close is an OVERLAY on the select Button, not a Button inside its label. Nested,
+// SwiftUI merged both into ONE accessibility element, so assistive tech couldn't reach
+// Close on its own. The label keeps an invisible 24pt slot where the × sits, so
+// the row lays out exactly as before. (Sibling buttons in an HStack were tried
+// first: the select Button stopped expanding and every title got squeezed.)
 func row(_ w) -> some View {
   VStack(spacing: 0) {
     Button(action: { cmux("workspace.select", workspace_id: w.id) }) {
@@ -481,11 +521,21 @@ func row(_ w) -> some View {
             if isGroupAnchor(w) {
               Image(systemName: "square.stack").font(.system(size: 10)).foregroundColor("#8A9199")
             }
-            Text(displayTitle(w))
-              .font(.system(size: 14, design: .monospaced))
-              .fontWeight(w.selected ? .bold : .medium)
-              .foregroundColor(w.selected ? "#FFFFFF" : "#D9D7CE")
-              .lineLimit(titleLineLimit(w)).multilineTextAlignment(.leading)
+            // Dirty = a yellow "*" hugging the name (native "main*"). It is a sibling
+            // of the truncating Text, never part of its string, so a long name
+            // truncates to "…" and the "*" still shows.
+            HStack(spacing: 1) {
+              Text(displayTitle(w))
+                .font(.system(size: 14, design: .monospaced))
+                .fontWeight(w.selected ? .bold : .medium)
+                .foregroundColor(w.selected ? "#FFFFFF" : "#D9D7CE")
+                .lineLimit(titleLineLimit(w)).multilineTextAlignment(.leading)
+                .help(displayTitle(w))   // full name as AXHelp; no hover bubble seen inside a Button label
+              if w.dirty == true {
+                Text("*").font(.system(size: 12, design: .monospaced)).bold().foregroundColor("#FFCC66")
+                  .help("Uncommitted changes")
+              }
+            }
             if w.pinned {
               Image(systemName: "pin.fill").font(.system(size: 9)).foregroundColor("#8A9199")
             }
@@ -502,20 +552,6 @@ func row(_ w) -> some View {
                 .lineLimit(1).truncationMode(.tail)
             }
           }
-          // dimension 2 — repo / git state (its own row, only when present).
-          // Dirty = a compact yellow "*" trailing the branch (native "main*"), not prose.
-          if hasRepoInfo(w) {
-            HStack(spacing: 4) {
-              Image(systemName: "arrow.triangle.branch").font(.system(size: 9)).foregroundColor("#6E7787")
-              Text(repoText(w))
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(repoColor(w))
-                .lineLimit(1).truncationMode(.tail)
-              if w.dirty == true {
-                Text("*").font(.system(size: 12, design: .monospaced)).bold().foregroundColor("#FFCC66")
-              }
-            }
-          }
         }
         Spacer()
         // Dim, unfilled: unread is "you haven't looked", not "you're needed".
@@ -523,15 +559,21 @@ func row(_ w) -> some View {
           Text("\(w.unread)")
             .font(.system(size: 10, design: .monospaced))
             .foregroundColor("#707A8C").padding(4)
+            .help(w.unread == 1 ? "1 unread notification" : "\(w.unread) unread notifications")
         }
-        Button(action: { cmux("workspace.close", workspace_id: w.id) }) {
-          Image(systemName: "xmark")
-            .font(.system(size: 12)).foregroundColor(closeColor(w))
-            .frame(width: 24, height: 24)
-        }
+        Rectangle().opacity(0).frame(width: 24, height: 24)   // the ×'s slot (overlay below)
       }
       .padding(6)
       .background { RoundedRectangle(cornerRadius: 0).foregroundColor(rowFill(w)).opacity(rowFillOpacity(w)) }
+    }
+    .overlay(alignment: .trailing) {
+      Button(action: { cmux("workspace.close", workspace_id: w.id) }) {
+        Image(systemName: "xmark")
+          .font(.system(size: 12)).foregroundColor(closeColor(w))
+          .frame(width: 24, height: 24)
+      }
+      .help("Close workspace")
+      .padding(6)
     }
     .contextMenu {
       Button(action: { cmux("workspace.select", workspace_id: w.id) }) {
@@ -571,6 +613,11 @@ func row(_ w) -> some View {
   }
 }
 
+// Minutes, not seconds: a digit changing every second in peripheral vision reads
+// as an event. clock.hour / clock.minute are Ints, so pad them by hand.
+func pad2(_ n: Int) -> String { return n < 10 ? "0\(n)" : "\(n)" }
+func clockText() -> String { return "\(pad2(clock.hour)):\(pad2(clock.minute))" }
+
 // ── layout ────────────────────────────────────────────────────────
 VStack(alignment: .leading, spacing: 0) {
   HStack(spacing: 10) {
@@ -584,10 +631,10 @@ VStack(alignment: .leading, spacing: 0) {
           .font(.system(size: 11, design: .monospaced)).bold().foregroundColor("#FFCC66")
       }
     }
-    if workspaces.filter { isWorking($0) }.count > 0 {
+    if workspaces.filter { showsWorking($0) }.count > 0 {
       HStack(spacing: 4) {
         Image(systemName: "bolt.fill").font(.system(size: 10)).foregroundColor("#87D96C")
-        Text("\(workspaces.filter { isWorking($0) }.count)")
+        Text("\(workspaces.filter { showsWorking($0) }.count)")
           .font(.system(size: 11, design: .monospaced)).bold().foregroundColor("#87D96C")
       }
     }
@@ -598,7 +645,7 @@ VStack(alignment: .leading, spacing: 0) {
           .font(.system(size: 11, design: .monospaced)).bold().foregroundColor("#DFBFFF")
       }
     }
-    Text(clock.time).font(.system(size: 11, design: .monospaced)).foregroundColor("#707A8C")
+    Text(clockText()).font(.system(size: 11, design: .monospaced)).foregroundColor("#707A8C")
   }
   .padding(9)
   Divider()

@@ -30,7 +30,8 @@ API, this tells you what bites. Everything below is verified through **cmux 0.64
 - **`progress`, `description`, and `color` DO reach the interpreter, but are null until
   explicitly set.** A known-set render probe is the only valid test; an empty value on an untouched
   workspace proves nothing. `progress.value` + `progress.label` can drive a value-accurate
-  `ProgressView(value:)`; `color` and `description` are also bindable.
+  meter, but draw it from shapes: `ProgressView(value:)` prints its raw value ("0.09") above the
+  bar, and `.tint` colours that text rather than the fill. `color` and `description` are also bindable.
 - **The title is still the strongest identity/fallback channel.** It persists, can be re-resolved
   after workspace refs rotate, and exists before the next poll restores `progress`. Keep stable
   title prefixes for sentinel identity and a Unicode fallback for bootstrap/offline windows.
@@ -76,8 +77,21 @@ API, this tells you what bites. Everything below is verified through **cmux 0.64
   short-circuits.
 - **Top-level `let` referencing `workspaces`/`clock` fails.** Those exist only inside
   the view builder; keep `let` bindings inside the `VStack` body.
-- **`array != nil` is always false**, even on a populated array — `if w.agents != nil { … }` never
-  renders. Guard arrays with `.count > 0`. (`!= nil` on a dictionary like `w.pr` works.)
+- **Never compare with `nil`.** On 0.64.25, `x != nil` and `x == nil` are falsy for strings,
+  dictionaries, numbers and arrays, even when the field is set (`w.progress != nil` failed while
+  `\(w.progress.value)` printed `0.07`). Check presence with `.count > 0` on a string or array,
+  `>= 0` on a number, `== true` on a Bool, or `if let x = w.field { … }` inside a view.
+- **`.frame(width:, alignment:)` ignores the alignment.** Pin text left with
+  `HStack { Text(…); Spacer() }.frame(width: n)`.
+- **`.help("…")` works** (it appears as `AXHelp` in cmux's accessibility tree). A hover bubble
+  shows for a view outside any `Button` and for a `Button`'s own `.help`; rest the pointer 3s+
+  before calling it missing. A title inside a `Button`'s label showed no bubble, and SwiftUI merges
+  label help into the button's one accessibility string.
+- **Never put a `Button` inside another `Button`'s label.** SwiftUI merges them into one
+  accessibility element, so the inner action can't be reached on its own. Two sibling `Button`s in
+  a row `HStack` break the layout instead (the first stops expanding). Hang the second one off the
+  first with `.overlay(alignment: .trailing) { Button(…) }`, and keep a same-size invisible
+  `Rectangle().opacity(0)` in the first one's label where it sits.
 - **No mutation, no early exit from loops.** `var n = 0; for x in xs { n += 1 }` leaves `n == 0`, and
   `return` inside a `for` doesn't leave the function — silently, and `validate` passes. Count with
   `.filter { … }.count`; its closures DO capture outer values (`workspaces.filter { $0.index <
@@ -95,7 +109,9 @@ API, this tells you what bites. Everything below is verified through **cmux 0.64
   rendered content, so give each row a non-zero background fill to make the whole frame
   tappable.
 - **Custom fonts aren't honored.** `.font(.custom(...))` silently falls back to the
-  proportional system font and adds ~1s lag. Use `.system(size:, design: .monospaced)`.
+  proportional system font and adds ~1s lag. Use `.system(size:, design: .monospaced)`. Re-probed
+  on 0.64.25 with an installed font: the PostScript name, the family name and `fixedSize:` all
+  render as SF Pro.
 
 ## Title markers must be STATIC
 

@@ -19,11 +19,13 @@ background pollers. Batteries included, easy to fork and tweak.
 - **Flat workspace list** in your manual order, SF Mono, Ayu-Mirage palette.
 - **Live agent row states** (via Claude Code hooks or the Amp plugin, and — on cmux ≥ 0.64.23 —
   cmux's own native agent state for every agent it integrates, no bridge needed): `compacting`
-  (purple), `working` (green, `×2` when several agents work in one workspace), `needs you` (orange —
-  unread, or the agent asked a question / hit a permission prompt), and `idle` (dim). Idle repo rows omit redundant `idle`; active rows keep activity and repo state
-  separate. The header shows action-needed first, then working and compacting counts.
+  (purple), `working` (green, `×2` when several agents work in one workspace) and `needs you` (orange —
+  the agent asked a question or hit a permission prompt), each on a second line under the title. A
+  resting workspace is a single line: its name, plus a yellow `*` when it has uncommitted changes.
+  The header shows action-needed first, then working and compacting counts.
 - **Inline actions**: click to select, an always-visible high-contrast `×` to close, pin indicators,
-  unread badges, and honest `⌘N` hints that preserve cmux's real shortcut gaps.
+  unread badges, and honest `⌘N` hints that preserve cmux's real shortcut gaps. Hover a meter's
+  percentage or the `×` for what it means. The `×` is also its own accessibility button.
 - **Workspace-group names** — on cmux ≥ 0.64.23 the sidebar reads groups directly: a group's
   header row shows the group's real name with a stack icon, and takes no `⌘N` digit (matching
   cmux's own numbering). Older cmux gave custom sidebars no group data, so there an opt-in
@@ -184,7 +186,7 @@ remaining manual steps. In short:
 `WITH_BRIDGE=1 ./install.sh` installs the bridge **and auto-wires** the Claude Code hook events
 into `~/.claude/settings.json` (idempotent, backed up) — then **restart Claude Code** so the new
 events register. With it you get `⚡ working` / `⏳ compacting` / `❓ waiting-on-you`. Without it, a
-cmux older than 0.64.23 shows every row `idle`; 0.64.23+ still shows `working` from cmux's native
+cmux older than 0.64.23 shows every row at rest; 0.64.23+ still shows `working` from cmux's native
 agent state, but not `compacting` or Claude's `waiting-on-you`.
 
 If the installer couldn't edit `settings.json` (no `jq`, or it wasn't valid JSON), add this under

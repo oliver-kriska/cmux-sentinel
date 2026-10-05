@@ -18,6 +18,19 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
   publishes each `vX.Y.Z` tag with its CHANGELOG section as the notes, and `make check` refuses a
   version bump that has no notes yet.
 
+### Changed
+
+- **A resting workspace takes one line.** The repeated `idle` label is gone, and the yellow `*` for
+  uncommitted changes now follows the workspace name instead of sitting on a line of its own behind
+  a branch icon. An activity line appears under the name only while an agent is working,
+  compacting or asking you something.
+- **Hover for details.** A meter's percentage explains itself: what it is a share of, when it resets
+  or renews, or how old the last good reading is when the poller can't refresh. The `×` says what it
+  does. The workspace name, the `*` and the unread count carry descriptions as accessibility help;
+  cmux didn't show a hover bubble for the name.
+- **The header clock shows hours and minutes.** The seconds digit changed every second in the corner
+  of your eye.
+
 ### Fixed
 
 - **A workspace whose agent ends its reply with a question now shows "asking…".** Agents often
@@ -31,9 +44,25 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
 - **The "needs you" alert no longer stays silent for a question that arrives while another agent
   in the same workspace is compacting.** The row turned amber once compaction finished, but
   `CMUX_SENTINEL_NOTIFY_CMD` never ran. It now runs when the amber row appears.
+- **Close is now a separate accessibility button.** Previously it was merged into the
+  workspace-selection button. Its accessibility action now closes the workspace independently,
+  without changing the row layout.
 - **Poller errors now carry a UTC timestamp, and the doctor no longer blames an error that
   predates a later successful refresh.** Undated errors from older versions still show, marked
   "time unknown".
+- **A workspace that is asking you something no longer looks like it is working.** When one agent
+  in a workspace was waiting on a question (`❓`) while another agent there was working, the row
+  said "asking…" but drew it in working-green with a green bar, and the header counted it under ⚡.
+  The colour, the bar and the header counts now follow the same order as the text, compacting >
+  asking > working, so the row is amber and counted under 🔔. The header's ⚡ count also no longer
+  includes a workspace whose row says "Compacting…".
+- **Idle Claude and Amp workspaces no longer show "Working…".** The sidebar also counted cmux's
+  own agent state, and cmux keeps some finished sessions marked running: every Amp session it
+  tracks (its turn counter misses most turn ends), and Claude sessions that had background work
+  when they stopped. Those rows read "Working…" (or "×2") for up to an hour after the agent went
+  quiet. For Claude and Amp the sidebar now relies only on its own `⚡` marker, which tracks turns
+  exactly. cmux's state still lights up the agents cmux-sentinel has no hook for (Codex, opencode,
+  Cursor, …).
 - **Old notifications no longer turn workspaces orange "needs you".** The sidebar treated cmux's
   unread-notification count as "needs you", but that count mostly holds passive notices such as
   Claude's idle "waiting for your input", Amp's "Finished responding" and "Command done". Each stays

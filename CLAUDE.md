@@ -30,13 +30,11 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   `set-progress` was never called — so of course it read `null`. It's **null-until-set**: after
   `cmux set-progress <0..1> --label <t>` the interpreter sees `w.progress.value` AND
   `w.progress.label` (verified 2026-07-06 by an in-sidebar render probe — see
-  `.claude/research/2026-07-06-conductor-sidebar-analysis.md`). So the usage meters now draw a
-  **native `ProgressView`** off the progress channel, and the **title** stays the meter's
-  restart-proof ANCHOR (`resolve_ref`/`isClaudeMeter` key on it) AND the fallback the sidebar renders
-  whenever progress is absent — bootstrap, offline-cleared, a dropped write, or the window right
-  after an app restart before the next poll re-asserts it. The poller writes BOTH every run
-  (`_meter_write`), so the title path is never "ripped out" and restart-persistence of `progress` is
-  a non-issue (it self-heals within one poll). **Agent working/compacting/waiting state still rides
+  `.claude/research/2026-07-06-conductor-sidebar-analysis.md`). The poller writes BOTH channels
+  every run (`_meter_write`), but **the sidebar renders meters from the TITLE only** (see the meter
+  bullet below): the title is the restart-proof ANCHOR (`resolve_ref`/`isClaudeMeter` key on it),
+  it is never absent the way `progress` is at bootstrap or right after an app restart, and the
+  interpreter's `ProgressView` is unusable anyway. **Agent working/compacting/waiting state still rides
   the title** (static markers, stripped for display) — a persistence + precedence choice, not a
   channel limit. **CAVEAT — the snapshot RPC is the WRONG instrument for this:**
   `cmux rpc extension.sidebar.snapshot '{}'` omits the `progress` key entirely even right after a
@@ -92,9 +90,16 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   Re-read on **0.64.25** (271 commits): the same 72 watched files are **byte-identical** to v0.64.24.
   The compare API caps at 300 files, so diff the blob SHAs from `git/trees/<tag>?recursive=1`
   instead. See `.claude/research/2026-09-25-cmux-0.64.25-release-check.md`.  **How the sidebar uses it (shipped 2026-09-15): native state is OR-ed with the title markers,
-  never instead of them.** `isWorking` = `⚡` marker OR any agent `status == "working"` whose
-  `lastActivityAt` is under 3600s old; `isWaiting` = `❓` marker OR any NON-Claude agent in
-  `needs_input`. Two rules, each learned: **(1) never trust native `needs_input` for
+  never instead of them.** `isWorking` = `⚡` marker OR any agent whose `kind` is NOT `claude`/`amp`
+  in `status == "working"` with `lastActivityAt` under 3600s old; `isWaiting` = `❓` marker OR any
+  NON-Claude agent in `needs_input`. Three rules, each learned. **(0) For the kinds the bridge covers
+  (Claude, Amp), the marker alone decides "working"; native state only feeds the `×N` count**
+  (Claude only, and only on a row that is already working). Measured 2026-10-01: every Amp record
+  in `~/.cmuxterm/amp-hook-sessions.json` sat at `running` with an `activePromptDepth` that only
+  climbs (597, 84, 37, 7…), because cmux's Amp plugin misses most turn ends. Claude records whose
+  `Stop` carried `hadPendingBackgroundWorkAtStop: true` stay `running` after the turn ends. Both
+  painted idle workspaces "Working…" (and inflated `×N`) for up to the TTL. The bridge ref-counts
+  live turns exactly, so it wins for those two kinds. **(1) never trust native `needs_input` for
   `kind == "claude"`.** cmux's reducer (`AgentChatSessionRegistry+Lifecycle.swift` `nextState`) maps
   EVERY `notification` hook to `needsInput`, and Claude sends its idle "waiting for your input"
   Notification ~61s after every `Stop` (measured in `~/.cmuxterm/events.jsonl`) — so every resting
@@ -106,12 +111,23 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   lastActivityAt` is plain Int arithmetic and works. `⏳ compacting` stays bridge-only (the reducer
   leaves the state unchanged on `preCompact`). `workLabel` shows `Working… ×N` when N>1 agents work in
   one workspace — `children[]` subagents are deliberately not counted.
-- **TRAP: `!= nil` on an ARRAY field is always false — guard arrays with `.count > 0`.** Probed
-  2026-09-15: `w.agents != nil` → false (and `if w.agents != nil { … }` never renders) on a workspace
-  where `w.agents.count` is 2. `w.agents.count > 0` and `w.agents.filter { $0.status == "working" }.count`
-  work; on an absent array `.count > 0` is false. `!= nil` on a DICTIONARY field (`w.pr`, `w.progress`)
-  still works. This nearly produced a wrong "Swift can't see `agents`" note — the raw `\(w.agents)`
-  interpolation plus a known-set control is what caught it.
+- **TRAP: never compare with the `nil` literal — on 0.64.25 EVERY such comparison is falsy, even
+  when the field is set.** Render-probed 2026-10-01 against known-set controls: `w.branch != nil`,
+  `w.branch == nil`, `w.progress != nil` and `w.progress.value != nil` all interpolated as nothing
+  while `\(w.progress.value)` printed `0.07` and `\(w.branch)` printed `main`. This silently hid
+  every branch name (rows showed a bare branch icon + `*`), every PR (two live ones were never
+  drawn) and the whole native meter path (every meter drew the title fallback) — `validate` passed
+  throughout. It first showed up on ARRAYS (2026-09-15: `w.agents != nil` false with
+  `w.agents.count` 2), and this file used to claim `!= nil` still worked on dictionaries; that is no
+  longer true, if it ever was. Presence checks that DO work, each probed on a set and an absent
+  field: `.count > 0` on a string or array (falsy when absent), `>= 0` on a number,
+  `== true` on a Bool, `"\(x)" != ""`, and `if let x = w.field { … }` inside a view. The sidebar has
+  no `nil` left in code; keep it that way. The raw-interpolation-plus-known-set-control probe is
+  what caught both the array case and this one. **Branch and PR names are not shown — on
+  purpose.** The trap hid them from the day they were written, so the density Oliver knows is "a
+  dirty row gets a yellow `*`, nothing else", and a name on every git row would add a line to most
+  rows. The row has no repo line at all now (next bullet), so there are no branch/PR helpers left.
+  If one comes back, check presence with `.count > 0` and get a screenshot approved first.
 - **TRAP: no mutation and no early exit from loops — use `.filter { … }.count`.** Probed 2026-09-15:
   `var n = 0; for a in w.agents { n += 1 }` leaves `n == 0`, and `return` inside a `for` body does
   not return from the function — both silently, `validate` passes. What DOES work: `.filter` closures
@@ -137,6 +153,10 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   readable, revisit whether the markers should defer to it rather than compete. Also note "workspace
   todos are USER-owned" is now an explicit upstream stance, so don't have an agent drive lanes even
   if a write API appears.
+  **UPDATE 2026-10-01: on 0.64.25 the CLI has one** — `cmux workspace status` prints the lane
+  (`working` / `inferred: working` / `override: none (auto)`) and `cmux workspace status set
+  <lane|auto>` pins it. The sidebar binding contract still has no lane field, so the sidebar
+  still can't read it, and the user-owned rule above still forbids a poller or agent writing it.
 - **TRAP: `cmux shortcuts` prints only `OK`** — it opens the Settings UI, it does not list anything.
   Grepping its output to test whether a shortcut exists returns nothing and looks like proof of
   absence; it is proof of nothing. (This exact mistake produced a wrong "not released yet" note here
@@ -172,13 +192,52 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   cmux, diff — plus a public `stableId`. Don't reintroduce a stored id on anything less. The
   committed and deployed sidebars stay byte-identical (no id substitution at install).
   See `.claude/research/2026-08-10-cmux-0.64.22-vacation-catchup.md`.
-- **Meters use a native value bar now.** `ProgressView(value:)` needs a numeric `progress`; the
-  poller supplies it via `set-progress` (see the progress bullet above), so a meter row renders a
-  native `ProgressView` tinted from the value (red ≥90%, amber ≥70%, else blue) with
-  `w.progress.label` for compact `28% (1h 54m)` text. The title uses
-  `<anchor> |<detail>|<unicode bar>` so the fallback keeps the same label/detail-then-bar rhythm when
-  `progress` is absent. The title's severity emoji (🟡/🔴) stays because title **color** still can't
-  come from data.
+- **Meters render the title: label + detail on one line, the unicode bar below.** The title is
+  `<anchor> |<detail>|<unicode bar>`; its severity emoji (🟡/🔴) carries colour because title
+  **color** can't come from data. Native `progress` is written but deliberately not drawn: once the
+  `nil` trap was fixed (2026-10-01) and the native path rendered for the first time in a long while,
+  the interpreter's `ProgressView(value:)` printed its raw value (`0.09`) as text above the bar, and
+  `.tint` coloured that number instead of the fill (which stayed system grey). A bar drawn from two
+  fixed-width `Rectangle`s (`width * value` + the rest, clipped to a `Capsule`) DOES work. If one
+  ever ships, draw it only while `w.progress.label` equals the title's `|detail|` segment. Each
+  poll writes the same string to both channels, so a mismatch means one write was dropped and that
+  channel is a poll behind.
+- **Oliver REJECTED a full sidebar redesign on 2026-10-01; improve the current composition, don't
+  replace it.** The redesign had one-line meters with that shape bar, a status-strip header,
+  fixed-height rows, "Needs you · 2h" ages, colour/size tokens and type at 15/12/11. His verdict:
+  "terrible, not readable, too big, a lot of text; the first version before you started was better,
+  cleaner." It was rolled back to the original layout, keeping only the state fixes and the `nil`
+  fix. Oliver does want the CURRENT layout improved, incrementally: one focused change at a time,
+  shown as a before/after screenshot and approved before it ships. What he rejected was replacing
+  the composition (type scale, meter layout, header, row structure) wholesale. First approved
+  increment (2026-10-02): **a row is one line at rest.** The literal `idle` line is gone, and the
+  dirty `*` hugs the title (native `main*`) instead of sitting on its own line behind a branch icon.
+  An activity line appears only for Working… / Compacting… / asking…, so that line IS the
+  signal (a selected idle title can still wrap to two lines). The `*` is a sibling of the truncating `Text`, so a long name truncates to `…` and keeps
+  its `*` (verified live). One known quirk: on a title that wraps to two lines (selected or active
+  rows) the `*` sits at the right edge of the text block, not after the last word. The accent
+  capsule (26pt) and the 24pt close button keep a one-line row about 38pt tall, so the click target
+  barely shrinks. Second increment (2026-10-02): **hover text and an `HH:mm` clock.** The title
+  (full name), the `*`, the unread count, the `×` and every meter percentage carry `.help`, though only
+  the meter and × bubbles show on screen (see the `.help` bullet). The
+  meter text comes from `meterHelpText(title, name, detail)`, which works on plain strings so its
+  wording can be fixture-tested without fake meter workspaces. It only translates what the title's
+  `|detail|` already says: `% used · resets in …`, `at the last good reading, … old` while stale,
+  the money for spend, `renews in …` for Amp, `?` as "unknown". Anything without a `%` (`waiting…`,
+  `⚠ rate limit`, `n/a`) is passed through verbatim. Record:
+  `.claude/research/2026-10-01-sidebar-redesign.md`.
+- **Layout facts probed 2026-10-01 (0.64.25):** `.frame(width:, alignment: .leading)` IGNORES the
+  alignment (text came out centred) — pin with `HStack { Text; Spacer() }.frame(width:)`.
+  `ViewThatFits` does pick a later child when the first doesn't fit. Zero-argument `func`s work (e.g.
+  `func clockText() -> String`), as do typed multi-parameter view helpers
+  (`func badge(_ icon: String, _ n: Int) -> some View`). `w.latestAt` is the epoch of the agent's
+  last message; `agents[].sinceEpoch` is present only on non-idle records. If a wait age is ever
+  shown, take it ONLY from a non-Claude `needs_input` record's `sinceEpoch` (the real start of a
+  wait). `latestAt` is not a wait start (a permission prompt lands after the last message; a
+  co-tenant resets it), and a Claude record's `needs_input` is usually the idle notice. `.font(.custom(…))` is NOT honoured — re-probed with Berkeley Mono installed
+  (PostScript `BerkeleyMono-Regular`, family `Berkeley Mono`): PostScript name, family name and
+  `fixedSize:` all rendered as proportional SF Pro, identical to `.system(size:)`. That's conclusive
+  (known-installed control), so a font setting would need upstream support first.
 - **Before 0.64.23, workspace-GROUP data NEVER reached the sidebar interpreter** (probed 2026-06-19, see
   `.claude/research/2026-06-19-workspace-group-names-in-sidebar.md`). There is no `groups` binding and
   no per-workspace group field — referencing `groups` renders empty (the interpreter is lenient, it
@@ -251,6 +310,52 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   See `.claude/research/2026-08-10-cmux-0.64.22-vacation-catchup.md`,
   `.claude/research/2026-07-15-workspace-shortcut-digits.md` and
   `.claude/research/2026-07-16-cmux-0.64.19-pre-restart-check.md`.
+- **`.help(...)` reaches the AX tree everywhere; a bubble has been seen only OUTSIDE a `Button`'s
+  label.** Probed 2026-10-02: `.help("PROBEHELP1")` on a `Text` showed up as `AXHelp` on that
+  `AXStaticText` in cmux's AX tree (walk it with `AXUIElementCopyAttributeValue` from a small
+  `swift` script; `AXIsProcessTrusted()` is true inside cmux). On screen, in bounded hovers Oliver
+  OK'd first, with cmux frontmost and the pointer confirmed on target by a `screencapture -C` crop:
+  - a meter's percentage `Text`, which sits outside any `Button`, showed its bubble ("91% of the
+    weekly limit used · resets in 12m");
+  - the row's close `Button` (an overlay, see the next bullet) showed "Close workspace" after a 3.5s
+    rest. A 2s rest showed nothing, so wait longer before calling a tooltip missing;
+  - inside the row `Button`'s label, no title bubble appeared in the tested hovers (2s, then 3.5s
+    while the × bubble from the previous step stayed up). The `*` hover was inconclusive (2s only),
+    and the unread count was never hovered.
+  Their help is not lost: SwiftUI merges a `Button` label's child help into the row's single
+  `AXButton` as accessibility help (`AXHelp` "enaia-main, Uncommitted changes, 4 unread
+  notifications"). That proves the metadata exists, not how VoiceOver announces it. Hover text that
+  must be SEEN belongs on a view outside a `Button` label. Probe practice:
+  `NSRunningApplication.activate` from a background process left Arc frontmost, while
+  `open -b <cmux bundle id>` brings cmux forward; save and restore the front app and the pointer in
+  a `defer`. Don't hover or click without asking: raising cmux steals focus, and keystrokes would
+  land in a terminal. cmux-cua's background input is unavailable ("Computer Use onboarding is still
+  in progress"). The same AX walk doubles as a render probe: a probe `Text`'s string comes back as
+  `AXValue`, which is how the meter wording and the `HH:mm` padding (`07:05`, `12:00`, `00:09`)
+  were fixture-checked without a screenshot.
+- **The row's × is an OVERLAY on the select `Button`, never a `Button` inside its label** (2026-10-02).
+  Nested, SwiftUI merged both into one AX element: the row's `AXPress` selected, and there was no
+  separate Close action in the accessibility tree. Making them siblings in the row `HStack` broke the layout instead:
+  the select `Button` stopped expanding, titles were squeezed and rows grew. What works is
+  `.overlay(alignment: .trailing) { Button(close) { … }.help(…).padding(6) }` on the select
+  `Button`, plus an invisible `Rectangle().opacity(0).frame(width: 24, height: 24)` in the label where
+  the × used to be, so the label lays out exactly as before (pixel-identical captures). Use
+  `.trailing`, not `.topTrailing`, which put the × 4.5pt high on two-line rows because the old ×
+  was vertically centred. A fixed-size overlay is NOT the greedy `.overlay { Rectangle()… }` trap
+  below; row height is unchanged. AX now lists a separate `AXButton` per row (description `Close`,
+  help `Close workspace`, `AXPress`) next to the row's own button in the `AXScrollArea`.
+  Live-tested on throwaway workspaces: `AXPress` on Close closed one, and a ⌘9 keystroke still
+  selected the last numbered row. **Not verified:** a real mouse click on the ×, since both guarded
+  attempts were skipped by their own guard. The indirect evidence is that the × bubble comes from the
+  overlay `Button`, so it is the topmost tracking view at that spot, but neither that nor `AXPress` proves that a pointer click
+  closes without selecting, or that the row's empty space still selects. Tab reachability can't be tested
+  without switching on keyboard navigation (`AppleKeyboardUIMode` is unset; don't toggle it), and
+  VoiceOver itself wasn't run. **Two traps for the next click test:**
+  - cmux's `AXUIElementCopyElementAtPosition` returns only the window's root `AXGroup` for any
+    sidebar point, so it can't guard a click. Use the target's AX frame plus
+    `CGWindowListCopyWindowInfo`.
+  - The Dock owns an invisible full-screen layer-20 window, so "the first window containing the
+    point" is always the Dock. Look at layer-0 windows only.
 - **Greedy modifiers that wreck row height:** `Divider().background("#hex")`,
   `.frame(maxHeight: .infinity)`, `.overlay { Rectangle().frame(height:1) }`. Use plain `Divider()` +
   a single `.padding(n)`. `.contentShape(Rectangle())` is a no-op. Custom fonts aren't honored —
