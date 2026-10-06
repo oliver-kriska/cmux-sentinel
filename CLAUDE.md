@@ -89,7 +89,12 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   (Cloud/iOS/IROH/browser/Computer-Use). See `.claude/research/2026-09-16-cmux-0.64.24-release-check.md`.
   Re-read on **0.64.25** (271 commits): the same 72 watched files are **byte-identical** to v0.64.24.
   The compare API caps at 300 files, so diff the blob SHAs from `git/trees/<tag>?recursive=1`
-  instead. See `.claude/research/2026-09-25-cmux-0.64.25-release-check.md`.  **How the sidebar uses it (shipped 2026-09-15): native state is OR-ed with the title markers,
+  instead. See `.claude/research/2026-09-25-cmux-0.64.25-release-check.md`.
+  Re-read on **0.65.0**: the binding contract only GAINED fields (`w.status`, the lane, see the lane
+  bullet; per-tab `hasUnread`/`latestPrompt`/`latestAt`). The agent reducer and the ⌘N numbering
+  files are unchanged, and the `nil` trap is fixed (see that bullet). Render-probed live after the
+  upgrade, 2026-10-06. See `.claude/research/2026-10-06-cmux-0.65.0-release-check.md`.
+  **How the sidebar uses it (shipped 2026-09-15): native state is OR-ed with the title markers,
   never instead of them.** `isWorking` = `⚡` marker OR any agent whose `kind` is NOT `claude`/`amp`
   in `status == "working"` with `lastActivityAt` under 3600s old; `isWaiting` = `❓` marker OR any
   NON-Claude agent in `needs_input`. Three rules, each learned. **(0) For the kinds the bridge covers
@@ -128,6 +133,14 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   dirty row gets a yellow `*`, nothing else", and a name on every git row would add a line to most
   rows. The row has no repo line at all now (next bullet), so there are no branch/PR helpers left.
   If one comes back, check presence with `.count > 0` and get a screenshot approved first.
+  **FIXED on 0.65.0, with a NEW trap in its place.** A render probe on 2026-10-06 used rows with
+  and without a branch as the controls. `w.branch != nil`, `w.branch == nil`, `w.progress != nil`,
+  `w.agents != nil`, `w.latestAt != nil` and `if let` all answered correctly on both kinds of row.
+  The new trap: **`!=` against an ABSENT field is now TRUE** (`w.branch != "zzz"` was true on every
+  branchless row), whereas on 0.64.x it was falsy. So `w.opt != "x"` means opposite things on the
+  two versions; pair it with a presence check (`w.opt.count > 0 && w.opt != "x"`). Today every `!=`
+  operand in the sidebar is a field that is always present (`kind`, `name`, `title`). Keep the
+  `.count > 0` / `>= 0` presence checks and no `nil` in code, because 0.64.x installs still have the old trap.
 - **TRAP: no mutation and no early exit from loops — use `.filter { … }.count`.** Probed 2026-09-15:
   `var n = 0; for a in w.agents { n += 1 }` leaves `n == 0`, and `return` inside a `for` body does
   not return from the function — both silently, `validate` passes. What DOES work: `.filter` closures
@@ -139,6 +152,12 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   runtime (`~/.config/cmux/sidebars/<name>.js`), and for one base name `.js` wins over `.swift`, which
   wins over `.json`. Upstream ships `Examples/CustomSidebars/workspaces.js` — our exact base name. The
   JS context has no filesystem/network/timers, so sentinels stay the only meter data path either way.
+  **0.65.0 adds a template gallery (#15931) with two more ways to lose the sidebar.** "Use" on the
+  `workspaces` template installs `workspaces-2.js` and SELECTS it. That shadows nothing, so the doctor's `.js` check stays
+  quiet, but our sidebar is no longer the one shown. Also, `cmux sidebar new workspaces --from
+  workspaces --force` replaces our file. To switch back, run `cmux sidebar select workspaces`. The active sidebar appears
+  to be `defaults read com.cmuxterm.app cmuxExtensionSidebarProviderId`
+  (`cmux.sidebar.custom.workspaces` today); that has not been checked against an actual switch.
 - **cmux SHIPPED a native workspace "status lane" concept in 0.64.22 — usable by hand, invisible to
   us.** `markWorkspaceDone` (⌘;) and `cycleWorkspaceStatus` (⌘⇧;, "cycle the workspace status one
   lane forward") are present at the **v0.64.22 tag** (verified by fetching
@@ -157,6 +176,12 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   (`working` / `inferred: working` / `override: none (auto)`) and `cmux workspace status set
   <lane|auto>` pins it. The sidebar binding contract still has no lane field, so the sidebar
   still can't read it, and the user-owned rule above still forbids a poller or agent writing it.
+  **UPDATE 2026-10-06: 0.65.0 binds it as `w.status`**, one of `todo|working|needs-attention|
+  review|done`. A pin wins; otherwise cmux infers the lane, and a dirty tree alone makes it `working`.
+  The render probe found it on EVERY row, meters included, with values `todo`, `working` and `done`.
+  It is the lane, NOT agent state: it comes from the `set-status` lifecycle path, not `w.agents[]`.
+  The sidebar does not draw it. Showing it would be a design change, so it needs a before/after
+  approved first, and the user-owned rule still forbids writing it.
 - **TRAP: `cmux shortcuts` prints only `OK`** — it opens the Settings UI, it does not list anything.
   Grepping its output to test whether a shortcut exists returns nothing and looks like proof of
   absence; it is proof of nothing. (This exact mistake produced a wrong "not released yet" note here
@@ -234,7 +259,7 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   workspace's last SUBMITTED PROMPT**, from any agent or tab, not the agent's last message (this
   note said that until 2026-10-06). cmux sets it only in `recordSubmittedMessage` on
   `UserPromptSubmit`; `Stop` never moves it, and it is absent after a cmux restart until the next
-  prompt. Matched to the millisecond against `workspace.prompt.submitted` on 0.64.25, Claude and
+  prompt (right after the 0.65.0 upgrade restart, only 2 of 13 rows had it). Matched to the millisecond against `workspace.prompt.submitted` on 0.64.25, Claude and
   Amp alike. `agents[].sinceEpoch` is present only on non-idle records. If a wait age is ever
   shown, take it ONLY from a non-Claude `needs_input` record's `sinceEpoch` (the real start of a
   wait). `latestAt` is not a wait start (it is the turn's START; a co-tenant's
@@ -347,7 +372,10 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   `.trailing`, not `.topTrailing`, which put the × 4.5pt high on two-line rows because the old ×
   was vertically centred. A fixed-size overlay is NOT the greedy `.overlay { Rectangle()… }` trap
   below; row height is unchanged. AX now lists a separate `AXButton` per row (description `Close`,
-  help `Close workspace`, `AXPress`) next to the row's own button in the `AXScrollArea`.
+  help `Close workspace`, `AXPress`) next to the row's own button in the `AXScrollArea`. On 0.65.0,
+  which reimplemented `.contextMenu` as a native overlay, the two buttons are still separate, and
+  both now also list `AXShowMenu`. Under that overlay, clicks on the row and on the × have not been
+  re-tested.
   Live-tested on throwaway workspaces: `AXPress` on Close closed one, and a ⌘9 keystroke still
   selected the last numbered row. **Not verified:** a real mouse click on the ×, since both guarded
   attempts were skipped by their own guard. The indirect evidence is that the × bubble comes from the

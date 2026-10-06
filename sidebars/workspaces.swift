@@ -33,10 +33,12 @@
 // Usage meters ride hidden "sentinel" workspaces (see isUsageMeter).
 
 // ── predicates ────────────────────────────────────────────────────
-// NEVER compare with the nil literal: `x != nil` / `x == nil` are falsy for a
-// SET string, dictionary or number on this interpreter (render-probed 2026-10-01),
-// which silently hid every branch, PR and progress value. Probe presence by shape:
-// `.count > 0` on a string or array, `>= 0` on a number, `== true` on a Bool.
+// NEVER compare with the nil literal: on cmux 0.64.x `x != nil` / `x == nil` are
+// falsy even for a SET field (render-probed 2026-10-01), which silently hid every
+// branch, PR and progress value. 0.65.0 fixed that but made `w.opt != "x"` TRUE
+// when the field is absent (it was falsy before). Probe presence by shape, which
+// works on both: `.count > 0` on a string or array, `>= 0` on a number,
+// `== true` on a Bool.
 func hasProgress(_ w) -> Bool {
   return w.progress.value >= 0
 }
@@ -52,8 +54,8 @@ func hasProgressLabel(_ w) -> Bool {
 //      `w.agents[]` (kind / status / lastActivityAt). That lights up EVERY agent
 //      cmux hooks — Codex, opencode, pi, cursor… — with no adapter of ours. On an
 //      older cmux the field is simply absent and only the markers count.
-// TRAP: `w.agents != nil` is ALWAYS false on this interpreter, even with agents
-// present (no nil comparison works, on any type — see the predicates). Guard with
+// TRAP: on 0.64.x `w.agents != nil` is false even with agents present (no nil
+// comparison works there, on any type — see the predicates). Guard with
 // `.count > 0`, which is false for an absent array. Also: `var` mutation and
 // `return` inside a `for` loop silently do nothing here — use `.filter { }`, whose
 // closures DO capture outer names. All probed 2026-09-15.
