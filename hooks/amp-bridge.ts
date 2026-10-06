@@ -26,8 +26,9 @@
 //   (clear)   — agent.end, whatever the outcome (done | error | cancelled)
 //   ⏳ compacting — IMPOSSIBLE: Amp emits no compaction event. Not faked.
 //   ❓ asked in text — agent.end(done) passes the final reply; when it ends on a
-//     question the bridge keeps ❓ until the next agent.start. Always on: it only
-//     reads what Amp already said and changes nothing about how Amp behaves.
+//     question the bridge shows ❓, quieting to ❔ after 10 minutes, until the next
+//     agent.start. Always on: it only reads what Amp already said and changes
+//     nothing about how Amp behaves.
 //   ❓ waiting mid-turn — OPT-IN, off by default. Amp does not ask permission by default
 //     ("By default, Amp does not ask for approval before running tools"), so
 //     there is no blocked-on-user moment to observe. Set CMUX_SENTINEL_AMP_ASK=1
@@ -225,8 +226,8 @@ export default function (amp) {
       return
     }
     // done | cancelled — both mean this turn is over. A finished turn hands the
-    // bridge its final text, so a reply that ends on a question shows ❓ until you
-    // answer. A cancelled turn sends none: you are already at the keyboard.
+    // bridge its final text, so a reply that ends on a question shows ❓ (then ❔)
+    // until you answer. A cancelled turn sends none: you are already at the keyboard.
     drive("Stop", status === "done"
       ? { prompt_id: turnId(event), last_assistant_message: lastAssistantText(event) }
       : { prompt_id: turnId(event) })

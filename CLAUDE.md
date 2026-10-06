@@ -212,7 +212,7 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   the composition (type scale, meter layout, header, row structure) wholesale. First approved
   increment (2026-10-02): **a row is one line at rest.** The literal `idle` line is gone, and the
   dirty `*` hugs the title (native `main*`) instead of sitting on its own line behind a branch icon.
-  An activity line appears only for Working… / Compacting… / asking…, so that line IS the
+  An activity line appears only for Working… / Compacting… / asking… / asked, so that line IS the
   signal (a selected idle title can still wrap to two lines). The `*` is a sibling of the truncating `Text`, so a long name truncates to `…` and keeps
   its `*` (verified live). One known quirk: on a title that wraps to two lines (selected or active
   rows) the `*` sits at the right edge of the text block, not after the last word. The accent
@@ -230,11 +230,15 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   alignment (text came out centred) — pin with `HStack { Text; Spacer() }.frame(width:)`.
   `ViewThatFits` does pick a later child when the first doesn't fit. Zero-argument `func`s work (e.g.
   `func clockText() -> String`), as do typed multi-parameter view helpers
-  (`func badge(_ icon: String, _ n: Int) -> some View`). `w.latestAt` is the epoch of the agent's
-  last message; `agents[].sinceEpoch` is present only on non-idle records. If a wait age is ever
+  (`func badge(_ icon: String, _ n: Int) -> some View`). **`w.latestAt` is the epoch of the
+  workspace's last SUBMITTED PROMPT**, from any agent or tab, not the agent's last message (this
+  note said that until 2026-10-06). cmux sets it only in `recordSubmittedMessage` on
+  `UserPromptSubmit`; `Stop` never moves it, and it is absent after a cmux restart until the next
+  prompt. Matched to the millisecond against `workspace.prompt.submitted` on 0.64.25, Claude and
+  Amp alike. `agents[].sinceEpoch` is present only on non-idle records. If a wait age is ever
   shown, take it ONLY from a non-Claude `needs_input` record's `sinceEpoch` (the real start of a
-  wait). `latestAt` is not a wait start (a permission prompt lands after the last message; a
-  co-tenant resets it), and a Claude record's `needs_input` is usually the idle notice. `.font(.custom(…))` is NOT honoured — re-probed with Berkeley Mono installed
+  wait). `latestAt` is not a wait start (it is the turn's START; a co-tenant's
+  prompt resets it), and a Claude record's `needs_input` is usually the idle notice. `.font(.custom(…))` is NOT honoured — re-probed with Berkeley Mono installed
   (PostScript `BerkeleyMono-Regular`, family `Berkeley Mono`): PostScript name, family name and
   `fixedSize:` all rendered as proportional SF Pro, identical to `.system(size:)`. That's conclusive
   (known-installed control), so a font setting would need upstream support first.
@@ -393,10 +397,10 @@ cmux-sentinel doctor                   # dispatcher: setup/doctor/version/usage/
 make sidebar-live                     # mount repo sidebar against live data; human visual verdict
 
 # offline tests (stub cmux/security/curl/stat/$HOME — run in CI too)
-make test   # bridge-state(102) poller-gate(132) codex-poller(84) install-hooks(62) sentinel-setup(69)
-            # sentinel-doctor(80) group-sync(24) zed-bridge(24) open-in-zed(14) usage-tui(23)
+make test   # bridge-state(127) poller-gate(132) codex-poller(84) install-hooks(62) sentinel-setup(69)
+            # sentinel-doctor(80) group-sync(26) zed-bridge(24) open-in-zed(14) usage-tui(23)
             # amp-bridge(54) amp-poller(62) entrypoint(52) formula(18) release-notes(20)
-            # = 820 assertions total
+            # = 847 assertions total
 ```
 
 ## Architecture / where things live
@@ -412,7 +416,7 @@ bin/cmux-sentinel-doctor.sh READ-ONLY wiring report: cmux/sidebar/bridge/auto-re
 bin/cmux-sentinel           DISPATCHER installed as ~/bin/cmux-sentinel: setup|doctor|version|usage|paint|deploy|update|group-sync|zed. Resolves the cmux-*.sh helpers next to itself (or ../libexec, or ~/bin) and `exec`s them, so exit status and args pass through untouched. It does NOT replace them — the LaunchAgents reference them by absolute path.
 bin/cmux-sidebar-live-smoke.sh  stage + validate + mount the repo sidebar against live data, wait for a human verdict, then close/clean up; not a pixel assertion.
 bin/cmux-group-sync.sh      workspace-GROUP name → anchor-title sync (opt-in GROUP_NAME_SYNC). split-marker / multi-window / --list|--raw|--update.
-hooks/cmux-bridge.sh        Claude Code → cmux agent-state bridge (⚡ working / ⏳ compacting / ❓ waiting-on-you rows). AGENT-AGNOSTIC: CMUX_SENTINEL_SESSION_PID / _AGENT_LABEL / _LOG_SOURCE let any agent's adapter reuse it.
+hooks/cmux-bridge.sh        Claude Code → cmux agent-state bridge (⚡ working / ⏳ compacting / ❓ waiting-on-you / ❔ asked rows). AGENT-AGNOSTIC: CMUX_SENTINEL_SESSION_PID / _AGENT_LABEL / _LOG_SOURCE let any agent's adapter reuse it.
 hooks/amp-bridge.ts         Amp plugin (Bun/TS) → drives cmux-bridge.sh. Thin ADAPTER, no own state, so amp+claude co-tenants ref-count in one $WORKROOT. 2-of-3 states (no ⏳; ❓ opt-in).
 hooks/zed-bridge.sh         OPT-IN (ZED_SENTINEL=1) cmux-free Zed bridge: same ⚡/⏳/❓ markers to OSC-2 terminal metadata + JSON sink (stock Zed tab label stays process-derived).
 bin/cmux-open-in-zed.sh     OPT-IN cmux→Zed worktree handoff (`ze` alias / Ctrl-O via --shell-init). git-toplevel-aware; switch/--add/--new/--print.
@@ -439,14 +443,32 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
   `last_assistant_message` (Claude Code, seen on 2.1.289; the Amp adapter sends its last non-blank
   text block on `agent.end(done)`, nothing on `cancelled`). When the last non-blank line ends in
   `?` or `？` after peeling only markdown emphasis (`*`, `_`), `_stop_asking` drops the working
-  file and writes `stop` into `.waiting.<pid>`. Quotes and code spans are NOT peeled ("Renamed it
-  to `Continue?`" is a statement); a statement whose last line still ends in `?` is an accepted
-  false positive. A question followed by an options list is missed, also on purpose: a false
-  amber row costs the signal more than a missed one. **No timer, by Oliver's choice** ("until I
-  reply"): an offer he ignores stays amber. Four rules from Amp's review, each tested:
-  **(1)** only `UserPromptSubmit` clears a `stop` flag. A background agent's or subagent's tool call
-  can fire this session's `PreToolUse` too (a precaution, not probed here), so it must not count as
-  the answer; a question DIALOG is still answered by the next tool call (empty flag). **(2)** a `Stop` from an earlier turn is
+  file and touches `.asking.<pid>`, whose mtime records when it asked. Quotes and code spans are
+  NOT peeled ("Renamed it to `Continue?`" is a statement); a statement whose last line still ends
+  in `?` is an accepted false positive. A question followed by an options list is missed, also on
+  purpose: a false amber row costs the signal more than a missed one. **Amber for 10 minutes, then
+  quiet** (2026-10-06). The first version held ❓ until the next prompt, as Oliver chose ("until I
+  reply"). A day of it showed the cost, and he called it "still problematic": Claude closes many
+  replies with an offer ("Want me to draft … or post this as a PR review?"), and those rows sat
+  amber for hours next to the dialogs that really block. `_desired_mark` now ranks an `.asking`
+  flag younger than `_ASK_TTL` (`CMUX_SENTINEL_ASK_TTL`, default 600, `0` = never quiet) as ❓ and
+  an older one as `❔`, BELOW ⚡. The sidebar draws ❔ as a dim "asked" line outside the 🔔 count.
+  Dialog/permission flags (`.waiting.<pid>`) never fade. **The bridge times the fade, not the
+  sidebar.** The approved plan was `clock.epoch - w.latestAt`, but `latestAt` is the workspace's
+  last SUBMITTED PROMPT (layout bullet below): it counts from the turn's start, a prompt in any tab
+  resets it, and it is absent after a cmux restart. Nothing fires while a resting session waits, so
+  `_stop_asking` arms one detached `sh -c 'sleep N && exec bash <bridge> Reconcile'`, fds closed.
+  A hook's detached child outlives the hook and even `claude -p` exiting (verified 2026-10-06). The
+  timer only triggers a reconcile; the age rule lives in `_desired_mark`, so a stale timer is a
+  no-op and any other reconcile also fades it if the timer died. **A ❓ that "never cleared" while
+  the row kept working was a CO-TENANT, not a lost hook.** Debugged on enaia 2026-10-06: a second
+  Claude process in the same workspace (its own `CMUX_CLAUDE_PID`, a different transcript) ran
+  every prompt after the question, and its turns rightly don't answer another session's question.
+  Under the fade, that row turns ⚡ after 10 minutes. Four rules from Amp's review, each tested:
+  **(1)** only `UserPromptSubmit` clears `.asking`. A background agent's or subagent's tool call
+  fires this session's `PreToolUse` too (seen in a debug log: a background agent's calls kept
+  arriving after `Stop`), so it must not count as the answer; a question DIALOG's `.waiting` is
+  still answered by the next tool call. **(2)** a `Stop` from an earlier turn is
   ignored: `UserPromptSubmit` writes `prompt_id` into the session's working file (the Amp adapter
   passes `agent.start`/`agent.end`'s `id`), and `_stale_stop` skips a `Stop` whose id differs.
   A prompt you queued can start the next turn before the previous turn's async `Stop` hook runs.
@@ -455,9 +477,9 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
   random); it clears at the next prompt. **(3)** the ❓ alert fires from `_reconcile_ws` whenever
   ❓ becomes visible, so a question hidden behind a co-tenant's ⏳ alerts at `PostCompact`
   (it used to stay silent, for dialogs too). **(4)** the pid's absence keeps the idle Notification
-  gated out. `tests/bridge-state.sh` M–M6, `tests/amp-bridge.sh`.
+  gated out. `tests/bridge-state.sh` M–M9, `tests/amp-bridge.sh`.
   Precedence: compacting
-  > waiting > working > idle. **cmux's `unread` is NOT needs-you** (removed 2026-09-25): the
+  > waiting > working > asked > idle. **cmux's `unread` is NOT needs-you** (removed 2026-09-25): the
   notification store fills with passive notices — Claude's idle "waiting for your input", Amp's
   "Finished responding", "Command done", "Agent is ready" — which stay unread until that EXACT tab is
   focused, so multi-tab workspaces showed days-old orange "needs you · 6" rows. That was the rejected
@@ -533,7 +555,8 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
   default, so there's no blocked-on-user moment to observe — and turning it on CHANGES AMP'S
   BEHAVIOUR. A reply that ENDS on a question is ❓ regardless (see the agent-state bullet): it only
   reads what Amp already said. Caveat: the session pid is the plugin-runtime host, which outlives
-  an abandoned thread, so an ignored Amp question holds ❓ for as long as that amp process lives.
+  an abandoned thread, so an ignored Amp question stays (as the quiet ❔ after its first 10 minutes)
+  for as long as that amp process lives.
   Under `amp -x`, lifecycle events are SKIPPED unless you pass `--plugin-ready-timeout`.
 - **Usage meters group by provider:** each provider gets its own labelled panel section
   (`CLAUDE USAGE`, `CODEX USAGE`, `AMP USAGE`) — same component reused. A meter is just an idle

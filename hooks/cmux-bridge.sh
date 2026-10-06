@@ -17,9 +17,12 @@
 #   ⏳  compacting — an agent is compacting its context (PreCompact→PostCompact)
 #   ❓  waiting    — an agent is BLOCKED on you (asked a question / needs a
 #                   permission) and isn't actually running right now, OR its
-#                   turn ENDED on a plain-text question (see _stop_asking)
+#                   turn ENDED on a plain-text question in the last _ASK_TTL
+#                   seconds (see _stop_asking)
+#   ❔  asked      — that text question is older than _ASK_TTL and still has no
+#                   reply: shown quietly, no longer needs-you
 #
-# Precedence: compacting > waiting > working. Waiting outranks working because a
+# Precedence: compacting > waiting > working > asked. Waiting outranks working because a
 # session that asked AskUserQuestion / ExitPlanMode (or hit a MID-TURN permission
 # Notification) is alive but parked on YOU — showing it as "Working…" would hide
 # that it needs an answer. (The idle "waiting for input" Notification that fires
@@ -28,15 +31,17 @@
 # The marker is STATIC by design: an animated/spinner glyph in the title floods
 # cmux's title coalescer and freezes the sidebar (upstream #6291). cmux trims a
 # leading zero-width space, so the marker is visible — it shows in cmux's tab bar
-# too. All three are single Unicode scalars so .hasPrefix/.split stay safe.
+# too. All four are single Unicode scalars so .hasPrefix/.split stay safe.
 #
 # MULTIPLE AGENTS per workspace are REFERENCE-COUNTED via per-workspace state
 # files under $WORKROOT/<workspace_id>/:
 #   <pid>              — a live working session (touched each turn; expires, below);
 #                        holds the turn id from UserPromptSubmit, see _stale_stop
 #   .compacting.<pid>  — that session is compacting right now
-#   .waiting.<pid>     — that session is blocked on the user right now; content
-#                        "stop" = its turn ENDED on a question (only a prompt clears it)
+#   .waiting.<pid>     — that session is blocked on the user right now (a dialog
+#                        or permission prompt; its next tool call clears it)
+#   .asking.<pid>      — that session's turn ENDED on a question; the mtime is
+#                        when it asked, and only a prompt clears it
 #   .marked            — fast-path flag: title already carries the ⚡ work marker
 # Dead sessions are reaped by PID liveness (kill -0), so a crashed/zombie agent
 # can't strand a marker. One agent's Stop never clears another's. Codex can reuse
@@ -55,6 +60,10 @@
 # minutes). `.waiting.<pid>` deliberately does NOT expire — nothing refreshes it
 # while a session sits blocked on YOU, and "needs you" is the last signal that
 # should vanish on a timer. Tune with CMUX_SENTINEL_WORK_TTL (0 → pure liveness).
+# `.asking.<pid>` never vanishes either, but it does QUIET: a question asked in
+# text is often a closing offer ("Want me to open a PR?"), and holding it amber
+# for hours drowned out the dialogs that really block. After _ASK_TTL it drops
+# from ❓ to ❔ and stays there until you reply (CMUX_SENTINEL_ASK_TTL, 0 → never).
 
 # Capability query for adapters that may be newer than the installed bridge. It
 # intentionally runs before the cmux/socket gates and returns a token, not merely
@@ -81,6 +90,7 @@ esac
 WORKMARK="⚡"
 COMPMARK="⏳"
 WAITMARK="❓"
+ASKEDMARK="❔"
 WORKROOT="${TMPDIR:-/tmp}/cmux-sentinel-work"
 
 # AGENT-AGNOSTIC IDENTITY. The state machine below is not Claude-specific — the
@@ -139,15 +149,19 @@ _marked_fresh() {
 # hook re-asserts it, so err long.
 _WORK_TTL="${CMUX_SENTINEL_WORK_TTL:-3600}"
 
-# True when $1 has not been touched for _WORK_TTL seconds → its turn is over.
-# Every uncertain path (TTL disabled, non-numeric TTL, unreadable mtime) answers
-# "not expired": the safe failure direction is keeping a marker we might reap,
-# never reaping one belonging to a live turn.
+# How long a turn-ending text question stays ❓ before it quiets to ❔. See the
+# STALENESS note in the header.
+_ASK_TTL="${CMUX_SENTINEL_ASK_TTL:-600}"
+
+# True when $1 has not been touched for $2 seconds (default _WORK_TTL → its turn
+# is over). Every uncertain path (TTL disabled, non-numeric TTL, unreadable mtime)
+# answers "not expired": the safe failure direction is keeping a marker we might
+# reap, never reaping one belonging to a live turn.
 _expired() {
-  local mt
-  [ "$_WORK_TTL" -gt 0 ] 2>/dev/null || return 1
+  local mt ttl="${2:-$_WORK_TTL}"
+  [ "$ttl" -gt 0 ] 2>/dev/null || return 1
   mt=$(_mtime "$1") || return 1
-  [ $(($(date +%s) - mt)) -ge "$_WORK_TTL" ]
+  [ $(($(date +%s) - mt)) -ge "$ttl" ]
 }
 
 # Strip any leading activity marker (at most one is present).
@@ -156,6 +170,7 @@ _strip_marks() {
   t="${t#"$WORKMARK"}"
   t="${t#"$COMPMARK"}"
   t="${t#"$WAITMARK"}"
+  t="${t#"$ASKEDMARK"}"
   printf '%s' "$t"
 }
 
@@ -168,9 +183,9 @@ _title_of() {
 }
 
 # Desired marker for a workspace dir, reaping dead AND stale entries as a side
-# effect. Precedence: compacting > waiting > working > none.
+# effect. Precedence: compacting > waiting > working > asked > none.
 _desired_mark() {
-  local dir="$1" f pid live=0 comp=0 wait=0
+  local dir="$1" f pid live=0 comp=0 wait=0 asked=0
   [ -d "$dir" ] || { printf ''; return 0; }
   for f in "$dir"/.compacting.*; do
     [ -e "$f" ] || continue
@@ -182,6 +197,13 @@ _desired_mark() {
     pid="${f##*.waiting.}"
     if _alive "$pid"; then wait=1; else rm -f "$f"; fi
   done
+  for f in "$dir"/.asking.*; do # quiets with age, never reaped by it
+    [ -e "$f" ] || continue
+    pid="${f##*.asking.}"
+    if ! _alive "$pid"; then rm -f "$f"
+    elif _expired "$f" "$_ASK_TTL"; then asked=1
+    else wait=1; fi
+  done
   for f in "$dir"/*; do # non-dotfiles only → working session pids
     [ -e "$f" ] || continue
     pid="${f##*/}"
@@ -190,6 +212,7 @@ _desired_mark() {
   if [ "$comp" = 1 ]; then printf '%s' "$COMPMARK"
   elif [ "$wait" = 1 ]; then printf '%s' "$WAITMARK"
   elif [ "$live" = 1 ]; then printf '%s' "$WORKMARK"
+  elif [ "$asked" = 1 ]; then printf '%s' "$ASKEDMARK"
   else printf ''; fi
 }
 
@@ -222,12 +245,11 @@ _set_working() {
   local ws sess dir t; ws=$(_ws); [ -n "$ws" ] || return 0
   sess=$(_sess); dir="$WORKROOT/$ws"
   mkdir -p "$dir" 2>/dev/null; _touch_turn "$dir/$sess"
-  # This session resumed → not waiting. Except after a turn that ENDED on a
-  # question (a non-empty flag, see _stop_asking): only your next prompt answers
-  # that, not a background agent's tool call.
-  if [ "$event" = UserPromptSubmit ] || [ ! -s "$dir/.waiting.$sess" ]; then
-    rm -f "$dir/.waiting.$sess"
-  fi
+  # This session resumed → no longer blocked on a dialog. A turn that ENDED on a
+  # question (see _stop_asking) is answered only by your next prompt, not by a
+  # background agent's tool call.
+  rm -f "$dir/.waiting.$sess"
+  [ "$event" = UserPromptSubmit ] && rm -f "$dir/.asking.$sess"
   _marked_fresh "$dir" && return 0                     # hot path: trust a fresh flag
   t=$(_title_of "$ws"); [ -n "$t" ] || return 0
   case "$t" in "$COMPMARK"*) return 0 ;; esac          # compacting wins; recorded the pid
@@ -277,7 +299,7 @@ _set_waiting() {
   sess=$(_sess); dir="$WORKROOT/$ws"
   mkdir -p "$dir" 2>/dev/null
   _touch_turn "$dir/$sess"                              # session is alive…
-  [ -s "$dir/.waiting.$sess" ] || : > "$dir/.waiting.$sess"  # …but parked on the user
+  : > "$dir/.waiting.$sess"                             # …but parked on the user
   rm -f "$dir/.marked"                                  # ⚡ fast-path no longer valid
   t=$(_title_of "$ws"); [ -n "$t" ] || return 0
   case "$t" in "$COMPMARK"* | "$WAITMARK"*) return 0 ;; esac  # compacting wins; already waiting
@@ -318,11 +340,11 @@ _clear_compacting() {
   _reconcile_ws "$ws"
 }
 
-# This session stopped → drop it (and any waiting flag) and re-derive the marker.
+# This session stopped → drop it (and any waiting/asking flag) and re-derive the marker.
 _clear_working() {
-  local ws sess; ws=$(_ws); [ -n "$ws" ] || return 0
-  sess=$(_sess)
-  rm -f "$WORKROOT/$ws/$sess" "$WORKROOT/$ws/.waiting.$sess" "$WORKROOT/$ws/.marked" 2>/dev/null
+  local ws sess d; ws=$(_ws); [ -n "$ws" ] || return 0
+  sess=$(_sess); d="$WORKROOT/$ws"
+  rm -f "$d/$sess" "$d/.waiting.$sess" "$d/.asking.$sess" "$d/.marked" 2>/dev/null
   _reconcile_ws "$ws"
 }
 
@@ -361,19 +383,33 @@ _stale_stop() {
 }
 
 # This session's turn ENDED on a plain-text question ("Should I deploy it?").
-# Agents often ask this way instead of through AskUserQuestion, so it is treated
-# as waiting on you and gets the same ❓. The turn IS over, so the working file
-# goes (that also keeps the idle Notification ~60s later gated out by
-# _notify_waiting). The waiting flag stays until UserPromptSubmit, SessionEnd or
-# the session dying clears it — no TTL, for the reason in the header. The ❓ alert
-# comes from _reconcile_ws, once, when the marker becomes visible.
+# Agents often ask this way instead of through AskUserQuestion, so it gets the
+# same ❓ — for _ASK_TTL seconds, then the quieter ❔ (see the header). The turn IS
+# over, so the working file goes (that also keeps the idle Notification ~60s
+# later gated out by _notify_waiting). The asking flag stays until
+# UserPromptSubmit, SessionEnd or the session dying clears it. The ❓ alert comes
+# from _reconcile_ws, once, when the marker becomes visible.
 _stop_asking() {
   local ws sess dir; ws=$(_ws); [ -n "$ws" ] || return 0
   sess=$(_sess); dir="$WORKROOT/$ws"
   mkdir -p "$dir" 2>/dev/null
   rm -f "$dir/$sess" "$dir/.marked" 2>/dev/null         # the turn is over…
-  printf stop > "$dir/.waiting.$sess"                   # …but it ended on you
+  touch "$dir/.asking.$sess"                            # …but it ended on you, now
   _reconcile_ws "$ws"
+  _arm_ask_fade
+}
+
+# The ❓→❔ fade needs a wake-up: nothing else fires while a resting session waits
+# on you. One detached timer re-runs this script as `Reconcile` just past
+# _ASK_TTL, and _desired_mark decides from the flag's age, so a timer that is no
+# longer needed (you replied, or it asked again since) changes nothing. If the
+# timer dies, the next reconcile of any kind does the same fade. Every fd is
+# closed, as in _notify: a child holding the hook's stdout would stall the agent.
+_arm_ask_fade() {
+  [ "$_ASK_TTL" -gt 0 ] 2>/dev/null || return 0
+  ( sh -c 'sleep "$1" && exec bash "$2" Reconcile' cmux-sentinel-fade \
+      "$((_ASK_TTL + 1))" "$0" </dev/null >/dev/null 2>&1 & )
+  return 0
 }
 
 # Global self-heal: reconcile every known workspace (clears crash-stranded markers).
@@ -391,11 +427,11 @@ _reconcile_all() {
 _sweep_orphan_marks() {
   local line id t
   cmux list-workspaces --id-format uuids 2>/dev/null | while IFS= read -r line; do
-    case "$line" in *"$WORKMARK"* | *"$COMPMARK"* | *"$WAITMARK"*) : ;; *) continue ;; esac
+    case "$line" in *"$WORKMARK"* | *"$COMPMARK"* | *"$WAITMARK"* | *"$ASKEDMARK"*) : ;; *) continue ;; esac
     id=$(printf '%s' "$line" | grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' | head -1)
     [ -n "$id" ] || continue
     t=$(printf '%s' "$line" | sed -E "s/^.*${id}[[:space:]]+//; s/[[:space:]]*\[selected\]\$//")
-    case "$t" in "$WORKMARK"* | "$COMPMARK"* | "$WAITMARK"*) : ;; *) continue ;; esac
+    case "$t" in "$WORKMARK"* | "$COMPMARK"* | "$WAITMARK"* | "$ASKEDMARK"*) : ;; *) continue ;; esac
     [ -n "$(_desired_mark "$WORKROOT/$id")" ] && continue # has a live session → keep
     cmux rename-workspace --workspace "$id" "$(_strip_marks "$t")" &>/dev/null
     rm -rf "${WORKROOT:?}/$id" 2>/dev/null
@@ -483,6 +519,10 @@ case "$event" in
     tool=$(echo "$input" | jq -r '.tool_name // "unknown"')
     error=$(echo "$input" | jq -r '.error // ""' | head -c 80)
     cmux log --level error --source "$LOG_SOURCE" -- "$tool: $error" &>/dev/null
+    ;;
+
+  Reconcile) # internal: the ❓→❔ fade timer (see _arm_ask_fade)
+    ws=$(_ws); [ -z "$ws" ] || _reconcile_ws "$ws"
     ;;
 
   SessionEnd)

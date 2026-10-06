@@ -19,8 +19,9 @@ background pollers. Batteries included, easy to fork and tweak.
 - **Flat workspace list** in your manual order, SF Mono, Ayu-Mirage palette.
 - **Live agent row states** (via Claude Code hooks or the Amp plugin, and — on cmux ≥ 0.64.23 —
   cmux's own native agent state for every agent it integrates, no bridge needed): `compacting`
-  (purple), `working` (green, `×2` when several agents work in one workspace) and `needs you` (orange —
-  the agent asked a question or hit a permission prompt), each on a second line under the title. A
+  (purple), `working` (green, `×2` when several agents work in one workspace), `needs you` (orange —
+  the agent asked a question or hit a permission prompt) and `asked` (dim — its reply ended on a
+  question more than 10 minutes ago), each on a second line under the title. A
   resting workspace is a single line: its name, plus a yellow `*` when it has uncommitted changes.
   The header shows action-needed first, then working and compacting counts.
 - **Inline actions**: click to select, an always-visible high-contrast `×` to close, pin indicators,
@@ -55,10 +56,11 @@ mechanisms feed it:
    — so `working` shows with no bridge at all. **(b)** Claude Code hooks or `hooks/amp-bridge.ts` →
    `hooks/cmux-bridge.sh` → a STATIC marker on the
    *active* workspace's **title** (`⚡` working, `⏳` compacting, `❓` waiting-on-you — an agent that
-   asked a question, hit a permission prompt, or ended its reply on a question), reference-counted
+   asked a question, hit a permission prompt, or ended its reply on a question in the last 10
+   minutes — and `❔` asked, the same question once those 10 minutes pass), reference-counted
    so multiple agents in one workspace don't stomp it and dead sessions can't strand it.
    Precedence is compacting > waiting >
-   working. The sidebar detects the marker, colours the row, and strips the glyph for display.
+   working > asked. The sidebar detects the marker, colours the row, and strips the glyph for display.
    Agent state stays in the title because it must survive app/process boundaries and be shared by
    co-tenant agents; an animated marker would freeze cmux's title coalescer. The bridge is still
    what gives you `⏳ compacting` (cmux's native state has no such status) and a trustworthy Claude
@@ -211,9 +213,12 @@ Code:
 ```
 
 `PreToolUse` on `AskUserQuestion`/`ExitPlanMode` and `Notification` (permission prompts) drive
-`❓ waiting-on-you`, and so does a `Stop` whose reply ends on a question, which holds until your
-next prompt; `UserPromptSubmit`/`PreToolUse` drive `⚡ working`; `PreCompact`/`PostCompact` drive
-`⏳ compacting`; `Stop`/`SessionEnd` clear it.
+`❓ waiting-on-you`; `UserPromptSubmit`/`PreToolUse` drive `⚡ working`; `PreCompact`/`PostCompact`
+drive `⏳ compacting`; `Stop`/`SessionEnd` clear it. A `Stop` whose reply ends on a question is
+`❓` for `CMUX_SENTINEL_ASK_TTL` seconds (default `600`), then the quieter `❔ asked`, which ranks
+below working and stays until your next prompt. Many such questions are closing offers ("Want me
+to open a PR?"), and a row that stays amber for hours drowns out the dialogs that really block.
+`0` keeps it `❓` until you reply.
 
 Markers are reference-counted per workspace and reaped two ways: the session's process dying
 (`kill -0`), and the session going quiet. The second one matters because a turn can end without
@@ -222,7 +227,8 @@ outlives the turn — and a marker whose process is genuinely still alive would 
 indefinitely. Working/compacting state that has not been refreshed for `CMUX_SENTINEL_WORK_TTL`
 seconds (default `3600`; `0` restores pure process-liveness) is treated as a finished turn and
 cleared at the next reconcile. `❓ waiting-on-you` is deliberately exempt — nothing refreshes it
-while you are away from the keyboard, so it never expires on a timer.
+while you are away from the keyboard, so it never expires on a timer. (A question asked in text
+quiets to `❔` as above but is never dropped.)
 
 ### Amp working-state rows (opt-in)
 
@@ -399,7 +405,8 @@ or not, so "why don't I see a spend row" has an answer.
 ### Get alerted when an agent needs you (optional)
 
 The sidebar shows ❓ when a session is alive but blocked on you — it asked a question, is
-waiting on a permission, or ended its reply on a question. That is the one state worth interrupting you for when you are not
+waiting on a permission, or ended its reply on a question (that one quiets to ❔ after 10 minutes,
+without an alert). That is the one state worth interrupting you for when you are not
 looking at cmux, so the bridge can run a command on that transition:
 
 ```bash

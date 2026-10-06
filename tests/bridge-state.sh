@@ -33,6 +33,17 @@ esac
 FAKE
 chmod +x "$ROOT/bin/cmux"
 
+# Fake sleep for the bridge's ❓→❔ fade timer: record how long it was asked to
+# wait, then fail, so the timer never fires mid-test (back-dating the flag and
+# firing Reconcile drives the fade instead). The harness's own waits use the real
+# binary, resolved before the stubs go on PATH.
+REALSLEEP="$(command -v sleep)"
+cat > "$ROOT/bin/sleep" <<'FAKE'
+#!/bin/bash
+printf '%s\n' "$*" >> "$BRIDGETEST/.slept"; exit 1
+FAKE
+chmod +x "$ROOT/bin/sleep"
+
 # UUID-shaped id so the orphan-sweep's UUID regex matches — assembled at runtime
 # so no literal UUID lands in this file (the secret guard would flag one).
 FAKE_WS="$(printf '%08d-%04d-%04d-%04d-%012d' 0 0 0 0 0)"
@@ -54,7 +65,7 @@ stale() { touch -t 200001010000 "$1"; }
 ck()    { if [ "$(title)" = "$2" ]; then pass=$((pass + 1)); printf '  ✓ %s\n' "$1"
           else fail=$((fail + 1)); printf '  ✗ %s — got [%s] want [%s]\n' "$1" "$(title)" "$2"; fi; }
 
-sleep 300 & PID2=$!
+"$REALSLEEP" 300 & PID2=$!
 trap 'kill "$PID2" 2>/dev/null; rm -rf "$ROOT"' EXIT
 A=$$
 
@@ -179,7 +190,7 @@ notewait() { # $1 = expected line count; returns as soon as it is reached
     # `<` on a missing file fails in the SHELL, before wc runs, so 2>/dev/null on
     # wc can't silence it — test existence first.
     [ -f "$NOTED" ] && [ "$(wc -l < "$NOTED")" -ge "$1" ] && return 0
-    i=$((i + 1)); sleep 0.2
+    i=$((i + 1)); "$REALSLEEP" 0.2
   done
   return 1
 }
@@ -197,7 +208,7 @@ cknote "notifier fires on the ❓ transition" "$(cat "$NOTED" 2>/dev/null)" "ena
 # property that makes the alert worth keeping — one per transition, not per event.
 firet PreToolUse "$PID2" AskUserQuestion
 firet PreToolUse "$PID2" ExitPlanMode
-sleep 0.3
+"$REALSLEEP" 0.3
 cknote "already-waiting fires no duplicate" "$(wc -l < "$NOTED" | tr -d ' ')" "1"
 
 # Resume, then block again → a genuinely new transition, so a second alert is right.
@@ -215,10 +226,10 @@ ck "a failing notifier still leaves ❓" "❓enaia"
 unset CMUX_SENTINEL_NOTIFY_CMD
 fire Stop "$PID2"; printf 'enaia' > "$ROOT/.title"; rm -rf "$WORKDIR"; rm -f "$NOTED"
 firet PreToolUse "$PID2" AskUserQuestion; ck "no notifier configured → ❓ unchanged" "❓enaia"
-sleep 0.2
+"$REALSLEEP" 0.2
 cknote "unset notifier writes nothing" "$([ -e "$NOTED" ] && echo present || echo absent)" "absent"
 
-echo "M: a turn that ENDS on a plain-text question → ❓ until you reply"
+echo "M: a turn that ENDS on a plain-text question → ❓ (quiets later, see M7)"
 # Stop carrying the agent's final reply (Claude Code's last_assistant_message; the
 # Amp adapter sends the same field). jq builds the JSON so quotes and newlines survive.
 fires() { jq -n --arg m "$3" '{last_assistant_message: $m}' \
@@ -267,7 +278,7 @@ fires Stop "$PID2" "Should I merge it?";                  ck "asks in text → �
 notewait 1
 cknote "notifier fires on the text-question transition" "$(cat "$NOTED" 2>/dev/null)" "enaia|waiting"
 fires Stop "$PID2" "Should I merge it?"
-sleep 0.3
+"$REALSLEEP" 0.3
 cknote "already ❓ fires no duplicate" "$(wc -l < "$NOTED" | tr -d ' ')" "1"
 unset CMUX_SENTINEL_NOTIFY_CMD
 fire SessionEnd "$PID2";                                  ck "SessionEnd → idle"         "enaia"
@@ -308,13 +319,65 @@ export CMUX_SENTINEL_NOTIFY_CMD='printf "%s|%s\n" "$1" "$2" >> '"$NOTED"
 fire PreToolUse "$A"; fire PreCompact "$A";               ck "co-tenant compacting → ⏳" "⏳enaia"
 fire PreToolUse "$PID2"
 fires Stop "$PID2" "Should I merge it?";                  ck "question under ⏳ stays ⏳" "⏳enaia"
-sleep 0.3
+"$REALSLEEP" 0.3
 cknote "no alert while hidden" "$([ -e "$NOTED" ] && echo present || echo absent)" "absent"
 fire PostCompact "$A";                                    ck "compaction ends → ❓"      "❓enaia"
 notewait 1
 cknote "alert when ❓ surfaces" "$(cat "$NOTED" 2>/dev/null)" "enaia|waiting"
 unset CMUX_SENTINEL_NOTIFY_CMD
 fire Stop "$A"; fire SessionEnd "$PID2";                  ck "both done → idle"          "enaia"
+
+echo "M7: a text question quiets ❓ → ❔ after CMUX_SENTINEL_ASK_TTL; work outranks ❔"
+# The fade timer is detached, so wait briefly for the fake sleep to record it.
+sleptwait() { local i=0; while [ ! -s "$ROOT/.slept" ] && [ "$i" -lt 50 ]; do
+                i=$((i + 1)); "$REALSLEEP" 0.1; done; }
+rm -rf "$WORKDIR"; rm -f "$NOTED" "$ROOT/.slept"; printf 'enaia' > "$ROOT/.title"
+# shellcheck disable=SC2016  # $1/$2 belong to the notifier's `sh -c`, not to us
+export CMUX_SENTINEL_NOTIFY_CMD='printf "%s|%s\n" "$1" "$2" >> '"$NOTED"
+fire PreToolUse "$PID2"
+fires Stop "$PID2" "Want me to open a PR?";               ck "asks → ❓"                 "❓enaia"
+sleptwait
+cknote "fade timer armed just past the 600s default" "$(cat "$ROOT/.slept" 2>/dev/null)" "601"
+fire Reconcile "$PID2";                                   ck "timer before the TTL → still ❓" "❓enaia"
+stale "$WORKDIR/.asking.$PID2"
+fire Reconcile "$PID2";                                   ck "timer past the TTL → ❔"   "❔enaia"
+fire Notification "$PID2";                                ck "idle notice keeps ❔"      "❔enaia"
+fire SessionStart "$A";                                   ck "reconcile keeps ❔"        "❔enaia"
+notewait 1; "$REALSLEEP" 0.3
+cknote "quieting to ❔ sends no second alert" "$(wc -l < "$NOTED" | tr -d ' ')" "1"
+fire PreToolUse "$A";                                     ck "a co-tenant's work outranks ❔ → ⚡" "⚡enaia"
+fire Reconcile "$A";                                      ck "and a reconcile agrees → ⚡" "⚡enaia"
+fire Stop "$A";                                           ck "co-tenant done → ❔ again" "❔enaia"
+fire UserPromptSubmit "$PID2";                            ck "you reply → ⚡"            "⚡enaia"
+fires Stop "$PID2" "Should I merge it too?";              ck "a new question → ❓"       "❓enaia"
+notewait 2
+cknote "❔ → ❓ is a new transition, so it alerts" "$(wc -l < "$NOTED" | tr -d ' ')" "2"
+unset CMUX_SENTINEL_NOTIFY_CMD
+fire UserPromptSubmit "$PID2"; fire Stop "$PID2";         ck "→ idle"                    "enaia"
+
+echo "M8: a dialog during a faded question is ❓, and the question outlives it"
+fires Stop "$PID2" "Want me to open a PR?"; stale "$WORKDIR/.asking.$PID2"
+fire Reconcile "$PID2";                                   ck "faded → ❔"                "❔enaia"
+fire PreToolUse "$PID2";                                  ck "a background agent works → ⚡" "⚡enaia"
+fire Notification "$PID2";                                ck "and hits a permission prompt → ❓" "❓enaia"
+fire PreToolUse "$PID2";                                  ck "granted → ⚡"              "⚡enaia"
+stale "$WORKDIR/$PID2"
+fire Reconcile "$PID2";                                   ck "its work goes stale → ❔ (still unanswered)" "❔enaia"
+fire SessionEnd "$PID2";                                  ck "SessionEnd → idle"         "enaia"
+
+echo "M9: CMUX_SENTINEL_ASK_TTL=0 never quiets, and ❔ orphans are swept"
+export CMUX_SENTINEL_ASK_TTL=0
+rm -f "$ROOT/.slept"
+fire PreToolUse "$PID2"
+fires Stop "$PID2" "Want me to open a PR?";               ck "asks → ❓"                 "❓enaia"
+stale "$WORKDIR/.asking.$PID2"
+fire Reconcile "$PID2";                                   ck "any age → still ❓"        "❓enaia"
+"$REALSLEEP" 0.3
+cknote "no fade timer armed" "$([ -e "$ROOT/.slept" ] && echo present || echo absent)" "absent"
+unset CMUX_SENTINEL_ASK_TTL
+fire SessionEnd "$PID2";                                  ck "SessionEnd → idle"         "enaia"
+rm -rf "$WORKDIR"; printf '❔orphan' > "$ROOT/.title"
+fire SessionStart "$A";                                   ck "orphan ❔ (no live session) stripped" "orphan"
 
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

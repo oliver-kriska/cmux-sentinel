@@ -124,6 +124,13 @@ setgrp w1 '{"groups":[{"name":"Payduct","anchor_workspace_ref":"workspace:5"}]}'
 GROUP_NAME_SYNC=1 bash "$POLLER" --update; ckcode "marker diverged --update" "$?" 0
 ckhas "renamed to ⚡+name" "	workspace:5	⚡Payduct"
 
+echo "T5c: the quiet ❔ asked marker is preserved the same way"
+reset; setwin '[{"id":"w1"}]'
+setws  w1 '{"workspaces":[{"title":"❔Group 2","ref":"workspace:5"}]}'
+setgrp w1 '{"groups":[{"name":"Payduct","anchor_workspace_ref":"workspace:5"}]}'
+GROUP_NAME_SYNC=1 bash "$POLLER" --update; ckcode "asked marker --update" "$?" 0
+ckhas "renamed to ❔+name" "	workspace:5	❔Payduct"
+
 echo "T6: unnamed group (name null/empty) → skipped, never overwrites with empty"
 reset; setwin '[{"id":"w1"}]'
 setws  w1 '{"workspaces":[{"title":"Group 7","ref":"workspace:9"}]}'

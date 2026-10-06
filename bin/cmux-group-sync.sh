@@ -16,7 +16,8 @@
 # `cmux workspace-group list` and renames each group's ANCHOR workspace to the
 # group's name. Nothing in the sidebar file changes; it already renders titles.
 #
-# It PRESERVES a leading agent-state marker (⚡ working / ⏳ compacting / ❓ waiting)
+# It PRESERVES a leading agent-state marker (⚡ working / ⏳ compacting / ❓ waiting /
+# ❔ asked)
 # the bridge may have put on an anchor that's running an agent, and only renames
 # when the name actually differs — so steady state writes nothing (cmux's title
 # coalescer is sensitive to churn, upstream #6291).
@@ -110,7 +111,7 @@ main() {
       total=$(( total + 1 ))
       cur=$(title_in "$anchor" "$wsjson")
       # Split off a leading agent-state marker (⚡ working / ⏳ compacting / ❓
-      # waiting) the bridge prepends bare (e.g. "⚡cmux-sentinel"); preserve it so a
+      # waiting / ❔ asked) the bridge prepends bare (e.g. "⚡cmux-sentinel"); preserve it so a
       # sync on an anchor that's mid-turn doesn't blink the marker off, and compare
       # the BASE name (not the marker) to the group name to decide on a rename.
       marker=""; base="$cur"
@@ -118,6 +119,7 @@ main() {
         ⚡*) marker="⚡"; base="${cur#⚡}" ;;
         ⏳*) marker="⏳"; base="${cur#⏳}" ;;
         ❓*) marker="❓"; base="${cur#❓}" ;;
+        ❔*) marker="❔"; base="${cur#❔}" ;;
       esac
       base="${base# }"   # tolerate a "⚡ name" (with space) form too
       if [ "$base" = "$name" ]; then

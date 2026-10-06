@@ -663,7 +663,9 @@ if have cmux && have jq; then
       gtitle="$(cmux workspace list --window "$w" --json 2>/dev/null \
         | jq -r --arg r "$ganchor" '.workspaces[] | select(.ref == $r) | .title' 2>/dev/null | head -1)"
       gbase="$gtitle"
-      case "$gbase" in ⚡*) gbase="${gbase#⚡}" ;; ⏳*) gbase="${gbase#⏳}" ;; ❓*) gbase="${gbase#❓}" ;; esac
+      case "$gbase" in
+        ⚡*) gbase="${gbase#⚡}" ;; ⏳*) gbase="${gbase#⏳}" ;; ❓*) gbase="${gbase#❓}" ;; ❔*) gbase="${gbase#❔}" ;;
+      esac
       gbase="${gbase# }"
       [ "$gbase" = "$gname" ] || ndiverged=$((ndiverged + 1))
     done < <(cmux workspace-group list --window "$w" --json 2>/dev/null \

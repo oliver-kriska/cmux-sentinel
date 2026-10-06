@@ -66,6 +66,10 @@ chmod +x "$ROOT/bin/cmux"
 
 PATH="$ROOT/bin:$PATH"
 export PATH
+# A question at the end of a turn would arm the bridge's ❓→❔ fade timer, a real
+# 10-minute `sleep` that outlives this run. tests/bridge-state.sh covers the fade
+# with a fake sleep; here 0 keeps ❓ until the next prompt and arms no timer.
+export CMUX_SENTINEL_ASK_TTL=0
 
 pass=0; fail=0
 ok()   { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }

@@ -4,16 +4,19 @@
 //   green #87D96C · red #F28779 · selection #33415E
 //
 // A row is ONE line at rest; an activity line appears under the title only while
-// an agent is working, compacting or asking (a selected title can still wrap).
+// an agent is working, compacting, asking or has an unanswered question (a
+// selected title can still wrap).
 // State is modeled as TWO INDEPENDENT dimensions:
 //   1. Agent activity — compacting (purple) / working (green) / needs-you
-//      (orange), on its own activity line; idle draws nothing. Compacting, waiting & working are read from STATIC
-//      markers the bridge keeps at the FRONT of the TITLE ("⏳"=compacting,
-//      "❓"=waiting-on-you, "⚡"=working). `unread` is NOT needs-you: cmux's
+//      (orange) / asked (dim), on its own activity line; idle draws nothing.
+//      All of it is read from STATIC markers the bridge keeps at the FRONT of
+//      the TITLE ("⏳"=compacting, "❓"=waiting-on-you, "⚡"=working,
+//      "❔"=a question asked in text that has gone unanswered for 10 minutes).
+//      `unread` is NOT needs-you: cmux's
 //      notification store fills with passive "Finished responding" / idle
 //      "waiting for your input" notices that stay unread until you focus that
 //      exact tab, so it's shown as a dim count only.
-//      Precedence: compacting > waiting > working > idle.
+//      Precedence: compacting > waiting > working > asked > idle.
 //      "Waiting" is the bridge's way of saying Claude asked a question / hit a
 //      permission prompt — the row shows the orange needs-you treatment, not
 //      green "Working…", because the session is parked on YOU.
@@ -110,8 +113,9 @@ func isCompacting(_ w) -> Bool {
 }
 // Waiting: the bridge flips the marker to "❓" when an agent is BLOCKED on you —
 // it asked a question (AskUserQuestion / ExitPlanMode), hit a permission prompt, or
-// ended its turn on a question in plain text (held until you reply). The idle
-// notice after a finished turn does NOT count; the bridge gates it out.
+// ended its turn on a question in plain text within the last 10 minutes (then it
+// quiets to "❔", see isAsked). The idle notice after a finished turn does NOT
+// count; the bridge gates it out.
 // The session is alive but parked, so this beats "working" and rides the
 // orange needs-you treatment. Markers are mutually exclusive (one leading glyph),
 // so isWaiting ⇒ !isWorking && !isCompacting — for the MARKER. A native non-Claude
@@ -120,6 +124,15 @@ func isCompacting(_ w) -> Bool {
 func isWaiting(_ w) -> Bool {
   if w.title.hasPrefix("❓") { return true }
   return agentNeedsInput(w)
+}
+// Asked: a turn ended on a question in plain text over 10 minutes ago and you
+// haven't replied. Many of those are closing offers ("Want me to open a PR?"), so
+// after its first 10 minutes as amber "asking…" it drops to a dim line: it's in
+// neither the 🔔 count nor the needs-you colours, and anything working outranks
+// it. The bridge times the fade and swaps the marker; `w.latestAt` can't time it,
+// because it is the time of the workspace's last submitted PROMPT (any tab).
+func isAsked(_ w) -> Bool {
+  return w.title.hasPrefix("❔")
 }
 // needs-you = an agent is BLOCKED on you (the ❓ marker, or a native non-Claude
 // needs_input) — never a bare `unread`. cmux's unread count is fed by passive
@@ -175,6 +188,11 @@ func displayTitle(_ w) -> String {
     if parts.count > 0 { return String(parts[0]) }
     return ""
   }
+  if w.title.hasPrefix("❔") {
+    let parts = w.title.split(separator: "❔")
+    if parts.count > 0 { return String(parts[0]) }
+    return ""
+  }
   return w.title
 }
 // "×N" only when cmux reports more than one live agent — the markers can't count.
@@ -187,6 +205,7 @@ func activityText(_ w) -> String {
   if isCompacting(w) { return "Compacting…" }
   if isWaiting(w) { return "asking…" }   // asked, needs permission, or ended on a question
   if isWorking(w) { return workLabel(w) }
+  if isAsked(w) { return "asked" }        // the dim fallback colour below
   return ""   // unreachable: showsActivity hides the line at rest
 }
 func activityColor(_ w) -> String {
@@ -202,12 +221,14 @@ func activityIcon(_ w) -> String {
   return ""
 }
 // The second line is the signal: it exists only while an agent is compacting,
-// working or waiting on you. A literal "idle" on every resting row repeated the
-// same word down the list without telling you anything (approved 2026-10-02).
+// working, waiting on you, or has an unanswered question. A literal "idle" on
+// every resting row repeated the same word down the list without telling you
+// anything (approved 2026-10-02).
 func showsActivity(_ w) -> Bool {
   if isCompacting(w) { return true }
   if isWorking(w) { return true }
   if needsYou(w) { return true }
+  if isAsked(w) { return true }
   return false
 }
 func titleLineLimit(_ w) -> Int {
