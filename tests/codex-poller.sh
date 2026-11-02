@@ -106,7 +106,7 @@ while IFS= read -r line; do
       elif [ -n "${STUB_NOWINDOWS:-}" ]; then
         printf '{"id":1,"result":{"rateLimits":{"planType":"pro","primary":null,"secondary":null},"rateLimitsByLimitId":null,"rateLimitResetCredits":null}}\n'
       elif [ -n "${STUB_WEEKLY_ONLY:-}" ]; then
-        printf '{"id":1,"result":{"rateLimits":{"planType":"pro","primary":{"usedPercent":%s,"windowDurationMins":10080,"resetsAt":1999999999},"secondary":null},"rateLimitsByLimitId":null,"rateLimitResetCredits":null}}\n' "${STUB_P7:-1}"
+        printf '{"id":1,"result":{"rateLimits":{"planType":"pro","primary":{"usedPercent":%s,"windowDurationMins":10080,"resetsAt":1999999999},"secondary":null,"credits":%s,"rateLimitReachedType":%s},"rateLimitsByLimitId":null,"rateLimitResetCredits":null}}\n' "${STUB_P7:-1}" "${STUB_CREDITS:-null}" "${STUB_REACHED:-null}"
       elif [ -n "${STUB_SHORT_ONLY:-}" ]; then
         printf '{"id":1,"result":{"rateLimits":{"planType":"plus","primary":{"usedPercent":%s,"windowDurationMins":300,"resetsAt":1999999999},"secondary":null},"rateLimitsByLimitId":null,"rateLimitResetCredits":null}}\n' "${STUB_P5:-1}"
       elif [ -n "${STUB_EXPANDED:-}" ]; then
@@ -157,6 +157,7 @@ ckstamp() { if [ -s "$STAMP" ] && grep -Eq '^[0-9]+$' "$STAMP"; then pass=$((pas
             else fail=$((fail + 1)); printf '  ✗ %s — no valid success stamp\n' "$1"; fi; }
 cknostamp() { if [ ! -e "$STAMP" ]; then pass=$((pass + 1)); printf '  ✓ %s\n' "$1"
               else fail=$((fail + 1)); printf '  ✗ %s — unexpected success stamp\n' "$1"; fi; }
+cknothas() { if grep -q -- "$2" "$RENAMES" 2>/dev/null; then fail=$((fail + 1)); printf '  ✗ %s (found %s)\n' "$1" "$2"; else pass=$((pass + 1)); printf '  ✓ %s\n' "$1"; fi; }
 reset()  { rm -f "$RENAMES" "$PROGRESS" "$STAMP"; }
 
 echo "T1: disabled (USAGE_PROVIDERS without codex) → exit 0, writes nothing"
@@ -370,6 +371,36 @@ STUB_RPC=ok STUB_P5=44 STUB_P7=9 STUB_NO_CX5H=1 \
 if find "$ROOT" -maxdepth 1 -type d -name 'cmux-codex-rpc.*' | grep -q .; then
   fail=$((fail + 1)); printf '  ✗ app-server transport directory leaked\n'
 else pass=$((pass + 1)); printf '  ✓ app-server transport directories cleaned\n'; fi
+
+echo "T-credits: the credit balance rides cx7d only while credits are being spent"
+# Live shape 2026-11-02: weekly at 100%, rate_limit_reached, finite balance as a
+# string. The balance has no ceiling, so it is a note on the weekly row, never a bar.
+ONCRED='{"hasCredits":true,"unlimited":false,"balance":"59819.0030175000"}'
+reset
+STUB_RPC=ok STUB_WEEKLY_ONLY=1 STUB_P7=100 STUB_CREDITS="$ONCRED" STUB_REACHED='"rate_limit_reached"' \
+  USAGE_PROVIDERS="claude codex" bash "$POLLER" --update >/dev/null; ckcode "on-credits --update" "$?" 0
+ckhas "exhausted week carries the balance as a 4th segment" "cx7d |100% .*|59.8k credits"
+ckprog "native progress label stays the plain detail" "100% (" 
+reset
+out=$(STUB_RPC=ok STUB_WEEKLY_ONLY=1 STUB_P7=100 STUB_CREDITS="$ONCRED" USAGE_PROVIDERS="claude codex" bash "$POLLER" --print 2>/dev/null)
+case "$out" in *"59.8k credits left"*) pass=$((pass + 1)); printf '  ✓ --print names the balance\n' ;;
+  *) fail=$((fail + 1)); printf '  ✗ --print on credits said: %s\n' "$out" ;; esac
+reset
+STUB_RPC=ok STUB_WEEKLY_ONLY=1 STUB_P7=40 STUB_CREDITS="$ONCRED" \
+  USAGE_PROVIDERS="claude codex" bash "$POLLER" --update >/dev/null
+cknothas "a week with headroom shows no balance" "credits"
+reset
+STUB_RPC=ok STUB_WEEKLY_ONLY=1 STUB_P7=100 STUB_CREDITS='{"hasCredits":false,"unlimited":false,"balance":"0"}' \
+  USAGE_PROVIDERS="claude codex" bash "$POLLER" --update >/dev/null
+cknothas "no credits on the account shows no balance" "credits"
+reset
+STUB_RPC=ok STUB_WEEKLY_ONLY=1 STUB_P7=100 STUB_CREDITS='{"hasCredits":true,"unlimited":true,"balance":null}' \
+  USAGE_PROVIDERS="claude codex" bash "$POLLER" --update >/dev/null
+cknothas "unlimited credits show no number" "credits"
+reset
+STUB_RPC=ok STUB_WEEKLY_ONLY=1 STUB_P7=100 STUB_CREDITS='{"hasCredits":true,"unlimited":false,"balance":"lots"}' \
+  USAGE_PROVIDERS="claude codex" bash "$POLLER" --update >/dev/null
+cknothas "a non-numeric balance is dropped, never guessed" "credits"
 
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

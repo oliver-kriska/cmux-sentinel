@@ -318,15 +318,24 @@ if have cmux && have jq; then
   # m7d (the per-model weekly cap) is metered only when CLAUDE_MODEL_METER=1 —
   # same local opt-in policy as the Amp orb meter, and for the same reason: an
   # unmetered sentinel reads 'n/a' forever while still eating a ⌘ key.
+  # 5h is gated on what the poller reports, like Amp's allowances: Anthropic
+  # stopped returning the 5-hour window (2026-11-02). Fail-open: an empty answer
+  # (offline, no creds, a stubbed curl) keeps the old "5h is expected" behaviour.
+  cl_live=""
+  if [ "$claude_on" = 1 ] && [ "$claude_inst" = 1 ] && [ -x "$HERE/cmux-claude-usage.sh" ]; then
+    cl_live=$("$HERE/cmux-claude-usage.sh" --buckets 2>/dev/null)
+  fi
   for lbl in "$lbl5" "$lbl7" "$lblm7d" "$lblspend"; do
     lbl_metered=1
     [ "$lbl" = "$lblm7d" ] && [ "${CLAUDE_MODEL_METER:-0}" != 1 ] && lbl_metered=0
+    [ "$lbl" = "$lbl5" ] && [ -n "$cl_live" ] && ! printf '%s\n' "$cl_live" | grep -qxF -- "$lbl" && lbl_metered=0
     rw="$(resolve_ref "$lbl")"; IFS=$'\t' read -r ref ref_win <<<"$rw"
     where="$ref"; [ -n "$ref_win" ] && where="$where in window $ref_win"
     close_cmd="$(close_hint "$ref" "$ref_win")"
     if [ -n "$ref" ]; then
       if [ "$claude_on" != 1 ] || [ "$claude_inst" != 1 ]; then warn "'$lbl' sentinel present ($where) but claude is off/uninstalled — close it to hide the panel: $close_cmd"
       elif [ "$lbl" = "$lblspend" ]; then ok "'$lbl' sentinel present ($where) — hidden by the sidebar until you actually spend"
+      elif [ "$lbl" = "$lbl5" ] && [ "$lbl_metered" = 0 ]; then warn "'$lbl' sentinel present ($where) but Anthropic reports no 5-hour window for this account — it reads 'n/a' and still eats a ⌘ key: $close_cmd"
       elif [ "$lbl_metered" = 0 ]; then warn "'$lbl' sentinel present ($where) but it isn't metered (CLAUDE_MODEL_METER is off) — it'll read 'n/a' forever and still eats a ⌘ key: $close_cmd"
       else ok "'$lbl' sentinel present ($where)"; fi
     else
@@ -334,6 +343,7 @@ if have cmux && have jq; then
       # the row and can't work out why it never appeared. Name the switch.
       if [ "$lbl" = "$lblm7d" ] && [ "$lbl_metered" = 0 ]; then
         ok "no '$lbl' sentinel — the per-model meter is off; set CLAUDE_MODEL_METER=1 in $envf and re-run $HERE/cmux-sentinel-setup.sh to meter it (see cmux-claude-usage.sh --print for whether you have such a cap)"
+      elif [ "$lbl" = "$lbl5" ] && [ "$lbl_metered" = 0 ]; then ok "no '$lbl' sentinel — correct, Anthropic reports no 5-hour window for this account (re-run setup if it returns)"
       elif [ "$lbl_metered" = 0 ]; then ok "no '$lbl' sentinel — correct, it isn't metered"
       elif [ "$claude_on" = 1 ] && [ "$claude_inst" = 1 ]; then warn "no '$lbl' sentinel (title \"$lbl\" or starting \"$lbl \") — create it: $HERE/cmux-sentinel-setup.sh"
       else ok "no '$lbl' sentinel — panel hidden by design (claude off/uninstalled)"; fi

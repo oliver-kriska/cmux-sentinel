@@ -381,6 +381,15 @@ func meterFallbackBar(_ w) -> String {
   if parts.count > 2 { return String(parts[2]) }
   return ""
 }
+// Optional 4th segment drawn at the end of the bar line, e.g. Codex's credit
+// balance while the weekly window is exhausted ("cx7d |100% (1d 20h) 🔴|▉▉▉|59.8k
+// credits"). m7d's 4th segment is its row LABEL (meterWindow), never a note.
+func meterNote(_ w) -> String {
+  if w.title.hasPrefix("m7d ") { return "" }
+  let parts = w.title.split(separator: "|")
+  if parts.count > 3 { return String(parts[3]) }
+  return ""
+}
 // ── meter hover text ──────────────────────────────────────────────
 // Built ONLY from the title's |detail| segment, so it can never claim more than
 // the row shows. Fresh: "84% (2h 29m) 🟡". Stale grace: "78% · 1h 5m old 🟡" (the
@@ -442,9 +451,22 @@ func meterRow(_ w) -> some View {
         .help(meterHelp(w))
     }
     if meterFallbackBar(w) != "" {
-      Text(meterFallbackBar(w))
-        .font(.system(size: 11, design: .monospaced)).foregroundColor("#73D0FF")
-        .lineLimit(1)
+      if meterNote(w) != "" {
+        HStack(spacing: 6) {
+          Text(meterFallbackBar(w))
+            .font(.system(size: 11, design: .monospaced)).foregroundColor("#73D0FF")
+            .lineLimit(1)
+          Spacer()
+          Text(meterNote(w))
+            .font(.system(size: 11, design: .monospaced)).foregroundColor("#8A9199")
+            .lineLimit(1)
+            .help("\(meterNote(w)) left — past the weekly limit, so usage is billed to credits")
+        }
+      } else {
+        Text(meterFallbackBar(w))
+          .font(.system(size: 11, design: .monospaced)).foregroundColor("#73D0FF")
+          .lineLimit(1)
+      }
     }
   }
 }

@@ -479,8 +479,8 @@ MISSING=(); REJECTED=()
 # Keeps the label prefix so resolve_ref + the sidebar anchor still match. Records a
 # missing/rejected sentinel in the ledger and returns non-zero, so the OTHER bucket
 # still gets its update.
-_update_bucket() { # $1=label  $2=na(0/1)  $3=pct  $4=human_reset
-  local label="$1" na="$2" pct="${3:-0}" human="${4:-?}" bar dot frac detail err rc
+_update_bucket() { # $1=label  $2=na(0/1)  $3=pct  $4=human_reset  $5=note (optional)
+  local label="$1" na="$2" pct="${3:-0}" human="${4:-?}" note="${5:-}" bar dot frac detail err rc
   if [ "$na" = 1 ]; then
     err=$(_paint "$label" "$label |n/a|"); rc=$?
     # No sentinel for a window the account doesn't HAVE is the intended steady state,
@@ -495,10 +495,35 @@ _update_bucket() { # $1=label  $2=na(0/1)  $3=pct  $4=human_reset
   fi
   bar=$(make_bar "$pct" 14); dot=$(sev_dot "$pct"); frac=$(to_frac "$pct")
   detail="${pct}% (${human})${dot}"
-  err=$(_meter_write "$label" "$label |${detail}|${bar}" "$frac" "$detail"); rc=$?
+  err=$(_meter_write "$label" "$label |${detail}|${bar}${note:+|$note}" "$frac" "$detail"); rc=$?
   [ "$rc" = 10 ] && { MISSING+=("$label"); return 1; }
   [ "$rc" = 11 ] && { REJECTED+=("$label (${err:-no detail})"); return 1; }
   return 0
+}
+
+# Credits balance, shown ONLY while it is what you are spending: the weekly window
+# is exhausted (usedPercent >= 100, or Codex says a rate limit was reached) and the
+# account has a finite, numeric balance. Prints e.g. "59.8k credits", or nothing.
+# A balance has no upper bound, so it never gets a bar (the same rule that keeps
+# Amp's `$` balance unmetered); it rides the weekly row as a 4th title segment
+# instead of costing a ⌘ key for a sentinel of its own. Seen live 2026-11-02:
+# {"hasCredits":true,"unlimited":false,"balance":"59819.0030175000"} next to
+# "rateLimitReachedType":"rate_limit_reached" on a 100% weekly window.
+credits_note() { # $1=full response  $2=weekly pct ("" when the window is absent)
+  local bal
+  bal=$(printf '%s' "$1" | jq -r --arg p "${2:-}" '
+      .rateLimits as $r
+      | ($r.credits // {}) as $c
+      | select((($p | tonumber? // 0) >= 100) or (($r.rateLimitReachedType // null) != null))
+      | select($c.hasCredits == true and ($c.unlimited // false) != true)
+      | ($c.balance | if type == "string" then tonumber? else . end)
+      | select(type == "number" and . >= 0)' 2>/dev/null)
+  [ -n "$bal" ] || return 0
+  awk -v b="$bal" 'BEGIN {
+    if (b >= 1000000) printf "%.1fM credits\n", b / 1000000
+    else if (b >= 1000) printf "%.1fk credits\n", b / 1000
+    else printf "%d credits\n", b
+  }'
 }
 
 main() {
@@ -582,6 +607,8 @@ main() {
 
   extras=$(additional_limits_json "$json")
   reset_summary=$(reset_credits_json "$json")
+  local cred=""
+  [ "$na7" = 1 ] || cred=$(credits_note "$json" "${pct7:-}")
 
   if [ "$mode" = "--status" ]; then
     status_json "available" "" "$((1 - na5))" "$((1 - na7))" "$extras" "$reset_summary"
@@ -606,7 +633,7 @@ main() {
 
   if [ "$mode" = "--print" ]; then
     if [ "$na5" = 1 ]; then echo "cx5h  n/a  · no 5h window"; else echo "cx5h  ${pct5}%  · resets ${h5}"; fi
-    if [ "$na7" = 1 ]; then echo "cx7d  n/a  · no weekly window"; else echo "cx7d  ${pct7}%  · resets ${h7}"; fi
+    if [ "$na7" = 1 ]; then echo "cx7d  n/a  · no weekly window"; else echo "cx7d  ${pct7}%  · resets ${h7}${cred:+  · $cred left}"; fi
     print_additional_limits "$extras" "$reset_summary"
     return
   fi
@@ -615,14 +642,14 @@ main() {
     cmux ping &>/dev/null || die "cmux socket rejected (restart cmux to apply socketControlMode=automation)"
     # Each bucket writes a real meter, or an honest "n/a" when its window is absent.
     _update_bucket "$LABEL_CX5H" "$na5" "${pct5:-0}" "${h5:-?}" || true
-    _update_bucket "$LABEL_CX7D" "$na7" "${pct7:-0}" "${h7:-?}" || true
+    _update_bucket "$LABEL_CX7D" "$na7" "${pct7:-0}" "${h7:-?}" "$cred" || true
     # A REJECTED rename is a broken write path, not a missing row — no freshness.
     [ "${#REJECTED[@]}" -gt 0 ] && die "cmux rejected the rename for: ${REJECTED[*]}"
     local sum5 sum7
     if [ "$na5" = 1 ]; then sum5="n/a"; else sum5="${pct5}% (${h5})"; fi
     if [ "$na7" = 1 ]; then sum7="n/a"; else sum7="${pct7}% (${h7})"; fi
     record_success || echo "WARN: meters updated, but couldn't record Codex freshness in $USAGE_STATE_DIR" >&2
-    echo "updated: ${LABEL_CX5H}=${sum5}  ${LABEL_CX7D}=${sum7}"
+    echo "updated: ${LABEL_CX5H}=${sum5}  ${LABEL_CX7D}=${sum7}${cred:+ ($cred left)}"
     # Data flowed, so freshness is stamped above; a missing sentinel for a LIVE
     # window is still an error, just one that no longer costs the other meter.
     [ "${#MISSING[@]}" -gt 0 ] && die "no sentinel workspace for: ${MISSING[*]} — create it: ~/bin/cmux-sentinel-setup.sh"

@@ -17,6 +17,10 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
   were published as tags only, so the repo page kept pointing at v0.1.0. A release workflow now
   publishes each `vX.Y.Z` tag with its CHANGELOG section as the notes, and `make check` refuses a
   version bump that has no notes yet.
+- **The Codex week row shows your credit balance once you're spending it.** When the weekly limit
+  is used up and Codex is billing usage to credits, the row's bar line ends with the balance, e.g.
+  `59.8k credits`, dimmed. It isn't there while the week still has headroom, and it never gets a
+  bar of its own, because a balance has no ceiling to fill.
 
 ### Changed
 
@@ -33,6 +37,12 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
 
 ### Fixed
 
+- **Claude meters keep working now that Anthropic no longer reports a 5-hour window.** The usage
+  endpoint started returning `five_hour: null` (2026-11-02), and the poller treated that as a
+  broken response, so every Claude row, the healthy weekly one included, read `⚠ no data`. The
+  5-hour row now reads `n/a` and the others keep their numbers. Setup stops creating the `5h`
+  sentinel while the window is gone, and the doctor tells you to close an existing one, since it
+  still takes a ⌘ key. If Anthropic brings the window back, re-running setup restores the meter.
 - **A workspace whose agent ends its reply with a question now shows "asking…".** Agents often
   ask in plain text at the end of a turn ("Should I deploy it?") instead of through a question
   dialog, and those rows went quiet as if the work were finished. For Claude Code and Amp alike,

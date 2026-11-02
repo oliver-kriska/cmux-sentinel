@@ -81,6 +81,9 @@ if [ "$code" != "200" ]; then
   body='{"error":{"message":"stub error body"}}'
 elif [ -n "${STUB_MISSING_BUCKET:-}" ]; then
   body='{"five_hour":{"utilization":7,"resets_at":"2026-06-19T20:00:00Z"}}'
+elif [ -n "${STUB_FH_NULL:-}" ]; then
+  # The live shape since 2026-11-02: Anthropic returns five_hour as null.
+  body='{"five_hour":null,"seven_day":{"utilization":42,"resets_at":"2026-06-25T00:00:00Z"}}'
 elif [ -n "${STUB_BAD_RESET:-}" ]; then
   body='{"five_hour":{"utilization":7,"resets_at":null},"seven_day":{"utilization":42,"resets_at":{"unexpected":true}}}'
 else
@@ -232,6 +235,29 @@ STUB_CURL="ok" STUB_MISSING_BUCKET=1 bash "$POLLER" --update; ckcode "missing-bu
 ckhas "missing bucket stamps no data" "⚠ no data"
 cknothas "missing bucket never paints 0%" "0%"
 ckprog "missing bucket clears stale native bars" "CLEAR"
+
+echo "T5e: no 5-hour window (five_hour: null) — weekly keeps working, 5h is n/a"
+# Regression 2026-11-02: Anthropic dropped the 5-hour window and the old "both
+# buckets required" check painted ⚠ no data on EVERY Claude row, 7d included.
+reset
+STUB_CURL="ok" STUB_FH_NULL=1 bash "$POLLER" --update; ckcode "null-5h --update" "$?" 0
+ckhas "7d still paints live data" "7d |42%"
+ckhas "an existing 5h sentinel reads n/a" "5h |n/a|"
+cknothas "nothing is marked no data" "no data"
+ckprog "the stale 5h bar is cleared" "CLEAR"
+ckstamp "a null 5h is a successful refresh"
+reset
+out=$(STUB_CURL="ok" STUB_FH_NULL=1 bash "$POLLER" --buckets 2>/dev/null)
+if ! printf '%s\n' "$out" | grep -qxF 5h && printf '%s\n' "$out" | grep -qxF 7d; then
+  pass=$((pass + 1)); printf '  ✓ --buckets drops 5h and keeps 7d\n'
+else fail=$((fail + 1)); printf '  ✗ --buckets with null 5h said: %s\n' "$out"; fi
+reset
+out=$(STUB_CURL="ok" STUB_FH_NULL=1 bash "$POLLER" --print 2>&1)
+case "$out" in *"5h  n/a"*"7d  42%"*) pass=$((pass + 1)); printf '  ✓ --print says 5h is n/a\n' ;;
+  *) fail=$((fail + 1)); printf '  ✗ --print with null 5h said: %s\n' "$out" ;; esac
+reset
+STUB_CURL="ok" STUB_FH_NULL=1 STUB_NO_5H=1 bash "$POLLER" --update; ckcode "null-5h, no 5h sentinel --update" "$?" 0
+cknothas "an absent 5h sentinel is not painted" "5h |"
 
 echo "T6: BARE sentinel titles → poller still resolves + renames (bootstrap path)"
 reset

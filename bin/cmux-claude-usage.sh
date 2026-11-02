@@ -1,6 +1,7 @@
 #!/bin/bash
 # cmux-claude-usage.sh — feed Claude Code rate-limit utilization into the cmux
-# custom sidebar via two "sentinel" workspaces' progress bars (5h + 7d).
+# custom sidebar via "sentinel" workspaces' progress bars (5h when reported, 7d,
+# and the optional per-model / spend rows).
 #
 # Data source: Anthropic's (unofficial/beta) OAuth usage endpoint — the same one
 # `ccusage statusline` calls. Returns real server-side utilization (0-100) and
@@ -635,33 +636,42 @@ main() {
     return
   fi
 
-  # The endpoint is unofficial. Validate BOTH required buckets and utilization
-  # values before converting anything: jq's `empty` plus to_pct's safety fallback
-  # used to turn a renamed or missing bucket into a believable 0% meter. Reset
-  # timestamps are optional presentation data; malformed/missing values honestly
-  # degrade to "?" without hiding a valid percentage. Keep camelCase fallbacks
-  # because both shapes have existed.
-  if ! printf '%s' "$json" | jq -e '
-      def valid_bucket($snake; $camel):
-        (.[$snake] // .[$camel]) as $b
-        | (($b | type) == "object")
-          and (($b.utilization | type) == "number");
-      valid_bucket("five_hour"; "fiveHour")
-      and valid_bucket("seven_day"; "sevenDay")
-    ' >/dev/null 2>&1; then
+  # The endpoint is unofficial. Validate the weekly bucket and its utilization
+  # before converting anything: jq's `empty` plus to_pct's safety fallback used to
+  # turn a renamed or missing bucket into a believable 0% meter. Reset timestamps
+  # are optional presentation data; malformed/missing values honestly degrade to
+  # "?" without hiding a valid percentage. Keep camelCase fallbacks because both
+  # shapes have existed.
+  #
+  # five_hour is OPTIONAL. Anthropic stopped returning it (`"five_hour": null`,
+  # first seen 2026-11-02) while seven_day kept working, and the old "both
+  # required" check turned that into `⚠ no data` on EVERY Claude row, the healthy
+  # weekly meter included. Same shape as Codex dropping its 5h window: a missing
+  # 5h is an `n/a` row and `--buckets` stops listing it, so setup skips the
+  # sentinel and a restored window comes back with no code change. seven_day stays
+  # required: without it there is nothing proven to show.
+  # shellcheck disable=SC2016  # jq program, not shell expansion
+  local bucket_ok='def valid_bucket($snake; $camel):
+      (.[$snake] // .[$camel]) as $b
+      | (($b | type) == "object") and (($b.utilization | type) == "number");'
+  if ! printf '%s' "$json" | jq -e "$bucket_ok"' valid_bucket("seven_day"; "sevenDay")' >/dev/null 2>&1; then
     [ "$mode" = "--update" ] && mark_offline "no data"
-    die "usage response is missing required five_hour/seven_day fields (endpoint schema changed?)"
+    die "usage response is missing the required seven_day field (endpoint schema changed?)"
   fi
+  local fh_live=0
+  printf '%s' "$json" | jq -e "$bucket_ok"' valid_bucket("five_hour"; "fiveHour")' >/dev/null 2>&1 && fh_live=1
 
-  local fh_pct fh_reset sd_pct sd_reset fh_epoch sd_epoch fh_human sd_human
-  fh_pct=$(bucket_field "$json" five_hour fiveHour utilization utilization)
-  fh_reset=$(bucket_field "$json" five_hour fiveHour resets_at resetsAt)
+  local fh_pct="" fh_reset="" sd_pct sd_reset fh_epoch sd_epoch fh_human="" sd_human
+  if [ "$fh_live" = 1 ]; then
+    fh_pct=$(bucket_field "$json" five_hour fiveHour utilization utilization)
+    fh_reset=$(bucket_field "$json" five_hour fiveHour resets_at resetsAt)
+    fh_epoch=$(iso_to_epoch "$fh_reset"); fh_pct=$(to_pct "$fh_pct"); fh_human=$(humanize_until "$fh_epoch")
+  fi
   sd_pct=$(bucket_field "$json" seven_day sevenDay utilization utilization)
   sd_reset=$(bucket_field "$json" seven_day sevenDay resets_at resetsAt)
-  fh_epoch=$(iso_to_epoch "$fh_reset"); sd_epoch=$(iso_to_epoch "$sd_reset")
-  fh_pct=$(to_pct "$fh_pct")
+  sd_epoch=$(iso_to_epoch "$sd_reset")
   sd_pct=$(to_pct "$sd_pct")
-  fh_human=$(humanize_until "$fh_epoch"); sd_human=$(humanize_until "$sd_epoch")
+  sd_human=$(humanize_until "$sd_epoch")
 
   # Per-model weekly row (opt-in). Parsed for --print and --buckets regardless of
   # the flag so `--print` can TELL you the row exists and is worth opting into.
@@ -692,7 +702,8 @@ main() {
   # Codex/Amp pollers: a POSITIVE answer may suppress a sentinel, silence never
   # may — every can't-tell path above already exited before reaching here.
   if [ "$mode" = "--buckets" ]; then
-    printf '%s\n' "$LABEL_5H" "$LABEL_7D"
+    [ "$fh_live" = 1 ] && printf '%s\n' "$LABEL_5H"
+    printf '%s\n' "$LABEL_7D"
     [ "$MODEL_METER" = 1 ] && [ -n "$m_pct" ] && printf '%s\n' "$LABEL_M7D"
     # The spend sentinel is created whenever the account HAS an overage budget — a
     # stable account property, not the fluctuating balance. Gating creation on
@@ -705,7 +716,11 @@ main() {
   fi
 
   if [ "$mode" = "--print" ]; then
-    echo "5h  ${fh_pct}%  · resets ${fh_human}  (${fh_reset})"
+    if [ "$fh_live" = 1 ]; then
+      echo "5h  ${fh_pct}%  · resets ${fh_human}  (${fh_reset})"
+    else
+      echo "5h  n/a  · no 5-hour window reported for this account"
+    fi
     echo "7d  ${sd_pct}%  · resets ${sd_human}  (${sd_reset})"
     if [ -n "$sp_pct" ]; then
       echo "spend ${sp_pct}%  · ${sp_used_txt} of ${sp_limit_txt} extra usage$([ "$sp_used" != 0 ] || printf '%s' '  [zero — the sidebar hides this row until you spend]')"
@@ -725,13 +740,11 @@ main() {
     # carries the compact detail + unicode bar fallback and the stable label anchor.
     # The label leads and the optional severity dot trails.
     local fh_bar sd_bar fh_dot sd_dot fh_frac sd_frac fh_lbl sd_lbl
-    fh_bar=$(make_bar "$fh_pct" 14); fh_dot=$(sev_dot "$fh_pct"); fh_frac=$(to_frac "$fh_pct")
     sd_bar=$(make_bar "$sd_pct" 14); sd_dot=$(sev_dot "$sd_pct"); sd_frac=$(to_frac "$sd_pct")
     # Compact progress label = pct + parenthesized countdown. The native bar already
     # communicates "usage", so repeating "resets" wastes the narrow right column.
     # ASCII-led so cmux's multibyte-prefix coalescer bug can't eat it; the optional
     # severity dot only ever trails.
-    fh_lbl="$(meter_detail "$fh_pct" "$fh_human")${fh_dot}"
     sd_lbl="$(meter_detail "$sd_pct" "$sd_human")${sd_dot}"
     # _meter_write resolves each sentinel FRESH by title label (across windows), then
     # writes BOTH the title (unicode-bar fallback + anchor) and the native progress
@@ -742,8 +755,18 @@ main() {
     # Report only what actually LANDED — "updated:" is a claim about writes, not
     # about the fetch.
     local painted=0 wrote=""
-    paint_meter "$LABEL_5H" "$LABEL_5H |${fh_lbl}|${fh_bar}" "$fh_frac" "$fh_lbl" \
-      && { painted=$((painted + 1)); wrote="${wrote}${LABEL_5H}=${fh_pct}% (${fh_human})  "; }
+    if [ "$fh_live" = 1 ]; then
+      fh_bar=$(make_bar "$fh_pct" 14); fh_dot=$(sev_dot "$fh_pct"); fh_frac=$(to_frac "$fh_pct")
+      fh_lbl="$(meter_detail "$fh_pct" "$fh_human")${fh_dot}"
+      paint_meter "$LABEL_5H" "$LABEL_5H |${fh_lbl}|${fh_bar}" "$fh_frac" "$fh_lbl" \
+        && { painted=$((painted + 1)); wrote="${wrote}${LABEL_5H}=${fh_pct}% (${fh_human})  "; }
+    else
+      # No 5-hour window on this account. An existing sentinel gets an honest
+      # `n/a` (not a frozen bar or a stale ⚠); an ABSENT one is the correct state
+      # (setup skips it), so it is never reported as missing.
+      _paint "$LABEL_5H" "$LABEL_5H |n/a|" >/dev/null 2>&1 || true
+      _clear_progress "$LABEL_5H"
+    fi
     paint_meter "$LABEL_7D" "$LABEL_7D |${sd_lbl}|${sd_bar}" "$sd_frac" "$sd_lbl" \
       && { painted=$((painted + 1)); wrote="${wrote}${LABEL_7D}=${sd_pct}% (${sd_human})  "; }
     if [ "$MODEL_METER" = 1 ]; then

@@ -102,13 +102,15 @@ ensure_live() { # $1 = label  $2 = description  $3 = live labels ("" = undetermi
 
 echo "cmux-sentinel setup — providers: $PROVIDERS"
 case " $PROVIDERS " in *" claude "*)
-  ensure "$LABEL_5H" "Claude 5-hour rate meter — managed by cmux-claude-usage.sh; leave idle"
+  cl_live=$(live_buckets "$CLAUDE_POLLER")
+  # Anthropic stopped reporting the 5-hour window (`five_hour: null`, 2026-11-02),
+  # so 5h is asked about like Codex's cx5h: skipped only on a POSITIVE answer that
+  # lacks it, created when the poller can't tell. The weekly meter stays on plain
+  # `ensure` — asking the poller must never be able to suppress it.
+  ensure_live "$LABEL_5H" "Claude 5-hour rate meter — managed by cmux-claude-usage.sh; leave idle" "$cl_live"
   ensure "$LABEL_7D" "Claude weekly rate meter — managed by cmux-claude-usage.sh; leave idle"
   # Per-model weekly cap (Fable et al). Opt-in for the same reason as Amp orbs: the
   # row costs one of the ⌘1…⌘9 keys, and most accounts don't watch a second cap.
-  # The two normal meters deliberately stay on plain `ensure` — asking the poller
-  # must never be able to suppress a proven-working meter.
-  cl_live=$(live_buckets "$CLAUDE_POLLER")
   if [ "${CLAUDE_MODEL_METER:-0}" = 1 ]; then
     ensure_live "$LABEL_M7D" "Claude per-model weekly meter — managed by cmux-claude-usage.sh; leave idle" "$cl_live"
   else

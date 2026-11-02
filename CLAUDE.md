@@ -425,7 +425,7 @@ cmux-sentinel doctor                   # dispatcher: setup/doctor/version/usage/
 make sidebar-live                     # mount repo sidebar against live data; human visual verdict
 
 # offline tests (stub cmux/security/curl/stat/$HOME — run in CI too)
-make test   # bridge-state(127) poller-gate(132) codex-poller(84) install-hooks(62) sentinel-setup(69)
+make test   # bridge-state(127) poller-gate(142) codex-poller(92) install-hooks(62) sentinel-setup(69)
             # sentinel-doctor(80) group-sync(26) zed-bridge(24) open-in-zed(14) usage-tui(23)
             # amp-bridge(54) amp-poller(62) entrypoint(52) formula(18) release-notes(20)
             # = 847 assertions total
@@ -755,6 +755,19 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
   layout on `unknown` instead of inventing a missing-window warning. Doctor must prove the live RPC
   before saying meters are active—a stored ChatGPT login alone is not availability.
   See `.claude/research/2026-07-16-codex-5h-window-gone-for-pro.md`.
+  **Claude followed on 2026-11-02: the endpoint returns `"five_hour": null`** while `seven_day`,
+  `limits[]` and `spend` stay live. The poller used to require BOTH buckets, so one null painted
+  `⚠ no data` on every Claude row. Now only `seven_day` is required; 5h follows the cx5h rules
+  (`n/a` on an existing sentinel, absent = quiet, `--buckets` omits it, setup uses `ensure_live`,
+  and the doctor asks `--buckets` and fails open). The `limits[]` array no longer has a session row
+  either, so there is no other 5h source to switch to.
+- **Codex's credit balance rides cx7d as a NOTE, never a meter** (2026-11-02, approved by
+  screenshot). `rateLimits.credits` (`hasCredits`, `unlimited`, `balance` as a STRING) has no
+  ceiling, so the Amp-`$` rule applies: no bar. `credits_note` emits it only while the week is
+  exhausted (`usedPercent >= 100` or `rateLimitReachedType` set) with a finite numeric balance, as a
+  4th title segment (`cx7d |100% (1d 20h) 🔴|▉…|59.8k credits`). The sidebar's `meterNote` draws a
+  4th segment dimmed at the end of the bar line, so the row keeps its height. m7d's 4th segment is
+  its row label, so `meterNote` excludes m7d.
 - **Provider selection is gated, not configured in the sidebar** (it can't read config — only
   workspace data). A provider's panel shows IFF its sentinels exist, and the sidebar auto-hides any
   provider with a zero `count`. So selection lives in setup: which pollers run + which sentinels
