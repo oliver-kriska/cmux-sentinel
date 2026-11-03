@@ -155,9 +155,12 @@ and cleans it up; it deliberately does not claim a pixel pass. See
   **0.65.0 adds a template gallery (#15931) with two more ways to lose the sidebar.** "Use" on the
   `workspaces` template installs `workspaces-2.js` and SELECTS it. That shadows nothing, so the doctor's `.js` check stays
   quiet, but our sidebar is no longer the one shown. Also, `cmux sidebar new workspaces --from
-  workspaces --force` replaces our file. To switch back, run `cmux sidebar select workspaces`. The active sidebar appears
-  to be `defaults read com.cmuxterm.app cmuxExtensionSidebarProviderId`
-  (`cmux.sidebar.custom.workspaces` today); that has not been checked against an actual switch.
+  workspaces --force` replaces our file. To switch back, run `cmux sidebar select workspaces`. The
+  selection is `defaults read com.cmuxterm.app cmuxExtensionSidebarProviderId`, written as
+  `cmux.sidebar.custom.<name>`; verified 2026-10-06 by switching to `finder` and back. The doctor
+  reads it and adds a NOTE naming any other selection (`tests/sentinel-doctor.sh` T18). It is a
+  note because picking another sidebar can be deliberate. The test suite stubs `defaults`, because
+  the suite's PATH keeps `/usr/bin` and would otherwise read the developer's real setting.
 - **cmux SHIPPED a native workspace "status lane" concept in 0.64.22 — usable by hand, invisible to
   us.** `markWorkspaceDone` (⌘;) and `cycleWorkspaceStatus` (⌘⇧;, "cycle the workspace status one
   lane forward") are present at the **v0.64.22 tag** (verified by fetching
@@ -426,9 +429,9 @@ make sidebar-live                     # mount repo sidebar against live data; hu
 
 # offline tests (stub cmux/security/curl/stat/$HOME — run in CI too)
 make test   # bridge-state(127) poller-gate(142) codex-poller(92) install-hooks(62) sentinel-setup(69)
-            # sentinel-doctor(80) group-sync(26) zed-bridge(24) open-in-zed(14) usage-tui(23)
+            # sentinel-doctor(92) group-sync(26) zed-bridge(24) open-in-zed(14) usage-tui(23)
             # amp-bridge(54) amp-poller(62) entrypoint(52) formula(18) release-notes(20)
-            # = 847 assertions total
+            # = 877 assertions total
 ```
 
 ## Architecture / where things live
@@ -782,6 +785,12 @@ examples/                   usage-sentinels.env + launchd plist templates (com.c
   current build `reload-config` applies this **live** (proven: an external launchd kick landed its
   renames with no restart) — the earlier "needs a full cmux restart" note was outdated. If external
   (launchd) socket commands start getting rejected, the automation mode regressed → restart cmux.
+  On cmux 0.65.0 and later the doctor reads the mode cmux is USING from `cmux socket-status --json`
+  (`effective_mode`, `managed`, `managed_source`), not from a grep of `cmux.json`. That covers a
+  managed profile that forces a mode and the legacy settings files. A missing or unparseable answer
+  falls back to the grep. `SocketControlMode` at the v0.65.0 tag has five cases. Only `automation`
+  and `allowAll` let launchd's renames in; `off`, `cmuxOnly` and `password` reject them. A managed
+  mode gets advice that names its source, not "edit cmux.json" (`tests/sentinel-doctor.sh` T19).
   Every complete provider `--update` atomically records an epoch under
   `~/.local/state/cmux-sentinel/usage/`; doctor warns when an enabled provider has no success stamp
   or the last one is older than `USAGE_STALE_AFTER_SECONDS` (default 900, zero disables). Offline and

@@ -119,6 +119,23 @@ else bad "sidebar not deployed (run ./install.sh)"; fi
 if [ -f "$CFG/sidebars/workspaces.js" ]; then
   warn "sidebars/workspaces.js SHADOWS workspaces.swift (.js wins) — cmux is not showing this sidebar; rename it: mv ~/.config/cmux/sidebars/workspaces.js ~/.config/cmux/sidebars/my-workspaces.js"
 fi
+# cmux 0.65.0's template gallery installs `workspaces-2.js` on "Use" and SELECTS
+# it. That shadows nothing, so every check above stays green while this sidebar is
+# simply not the one on screen. The selection is the app default below, written as
+# `cmux.sidebar.custom.<name>` (verified 2026-10-06 by switching to another sidebar
+# and back). A note, not a warning: picking another sidebar can be deliberate.
+# Unreadable (not macOS, never set, another bundle id) → say nothing.
+sel=""
+have defaults && sel="$(defaults read com.cmuxterm.app cmuxExtensionSidebarProviderId 2>/dev/null)"
+case "$sel" in
+  '') : ;;
+  cmux.sidebar.custom.workspaces)
+    [ -f "$CFG/sidebars/workspaces.js" ] || ok "cmux has this sidebar selected" ;;
+  cmux.sidebar.custom.*)
+    note "cmux is showing the '${sel#cmux.sidebar.custom.}' sidebar, not this one — switch back: cmux sidebar select workspaces" ;;
+  *)
+    note "cmux is showing another sidebar ($sel), not this one — switch back: cmux sidebar select workspaces" ;;
+esac
 
 echo "• working-state bridge"
 inst="$HOME/.claude/hooks/cmux-bridge.sh"
@@ -168,8 +185,26 @@ elif [ -f "$amp_plugin" ]; then
 fi
 
 echo "• auto-refresh"
+# cmux ≥ 0.65.0 reports the mode it is actually USING, which also covers a managed
+# profile that forces one and the legacy settings files. Older builds lack the
+# command, so an empty or unparseable answer falls back to reading cmux.json.
+# Only `automation` and `allowAll` let launchd's renames in (SocketControlMode).
+sock_mode=""; sock_managed=""
+if have cmux && have jq; then
+  IFS=$'\t' read -r sock_mode sock_managed < <(cmux socket-status --json 2>/dev/null \
+    | jq -r '[(.effective_mode // "" | tostring), (if .managed == true then (.managed_source // "a managed profile" | tostring) else "" end)] | @tsv' 2>/dev/null)
+fi
+if [ -n "$sock_mode" ]; then
+  case "$sock_mode" in
+    automation|allowAll) ok "socket mode in effect: $sock_mode (external renames allowed)" ;;
+    *) if [ -n "$sock_managed" ]; then
+         warn "socket mode in effect is '$sock_mode', forced by $sock_managed — launchd's renames will be rejected, and cmux.json can't change it"
+       else
+         warn "socket mode in effect is '$sock_mode', not automation — launchd's renames will be rejected; set \"automation\": { \"socketControlMode\": \"automation\" } in ~/.config/cmux/cmux.json, then: cmux reload-config"
+       fi ;;
+  esac
 # cmux.json is JSONC (comments), so grep rather than jq-parse it.
-if [ -f "$CFG/cmux.json" ]; then
+elif [ -f "$CFG/cmux.json" ]; then
   if grep -Eq '"socketControlMode"[[:space:]]*:[[:space:]]*"automation"' "$CFG/cmux.json"; then
     ok "socketControlMode: automation (external renames allowed)"
   else warn "cmux.json has no socketControlMode: automation — auto-refresh renames may be rejected"; fi

@@ -179,8 +179,9 @@ remaining manual steps. In short:
    a changed loaded plist: the installer prints exact `bootout` + `bootstrap` commands, or
    `./install.sh --reload-agents` safely reloads only jobs that are both changed and loaded.
 6. **Verify the pipeline:** `make doctor` (or `~/bin/cmux-sentinel-doctor.sh`) — a read-only check
-   that the bridge, hooks, launchd job, automation mode, sentinels, and recent successful provider
-   updates are all present. Each complete `--update` records a local epoch stamp; doctor warns after
+   that the sidebar is the one cmux has selected, and that the bridge, hooks, launchd job, the
+   automation mode cmux is actually using, sentinels, and recent successful provider updates are
+   all present. Each complete `--update` records a local epoch stamp; doctor warns after
    15 minutes without success, so a loaded-but-stuck launchd job cannot leave a plausible stale bar.
 
 ### Working-state rows (the hooks bridge)

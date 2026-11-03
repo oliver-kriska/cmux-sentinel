@@ -94,6 +94,10 @@ case "$1" in
   # make no native-data claims at all (the baseline run below relies on that).
   --version) [ -n "${STUB_CMUX_VERSION:-}" ] && printf 'cmux %s (103) [211b8bb35]\n' "$STUB_CMUX_VERSION"; exit 0 ;;
   ping) exit 0 ;;
+  # Unset STUB_SOCKET = a cmux older than 0.65.0, which has no socket-status.
+  socket-status)
+    [ -n "${STUB_SOCKET:-}" ] || { echo "Error: Unknown command 'socket-status'" >&2; exit 1; }
+    printf '%s\n' "$STUB_SOCKET" ;;
   sidebar) [ "$2" = validate ] && exit 0 ;;
   list-windows) printf '[{"id":"win-b"}]\n' ;;
   workspace)
@@ -151,7 +155,16 @@ cat > "$ROOT/bin/curl" <<'FAKE'
 [ -n "${STUB_LATEST:-}" ] || exit 7
 printf '%s\n' "$STUB_LATEST"
 FAKE
-chmod +x "$ROOT/bin/cmux" "$ROOT/bin/security" "$ROOT/bin/launchctl" "$ROOT/bin/codex" "$ROOT/bin/amp" "$ROOT/bin/curl"
+# Fake defaults: PATH keeps /usr/bin, so without this the suite would read the
+# DEVELOPER's real sidebar selection. It answers only the exact domain + key the
+# doctor reads (pinning the name), and unset STUB_SIDEBAR_SEL = key never written.
+cat > "$ROOT/bin/defaults" <<'FAKE'
+#!/bin/bash
+[ "$*" = "read com.cmuxterm.app cmuxExtensionSidebarProviderId" ] || exit 1
+[ -n "${STUB_SIDEBAR_SEL:-}" ] || { echo "The domain/default pair does not exist" >&2; exit 1; }
+printf '%s\n' "$STUB_SIDEBAR_SEL"
+FAKE
+chmod +x "$ROOT/bin/cmux" "$ROOT/bin/security" "$ROOT/bin/launchctl" "$ROOT/bin/codex" "$ROOT/bin/amp" "$ROOT/bin/curl" "$ROOT/bin/defaults"
 
 PATH="$ROOT/bin:/usr/bin:/bin"; export PATH
 out="$(bash "$DOCTOR" 2>&1)"; rc=$?
@@ -482,6 +495,50 @@ rm -f "$HOME/bin/cmux-sentinel-doctor.sh"
 out17c="$(bash "$DOCTOR" 2>&1)"
 case "$out17c" in *"DIFFERS from the installed"*) bad "warned with nothing installed to differ from";;
   *) ok "no installed copy means no note";; esac
+
+echo "T18: a different SELECTED sidebar is named, with the command that switches back"
+# cmux 0.65.0's template gallery installs workspaces-2.js and selects it. Nothing
+# shadows this file, so only the selection itself can explain an empty sidebar.
+case "$out" in *"sidebar selected"*|*"not this one"*) bad "an unreadable selection produced a claim";;
+  *) ok "no selection key → no claim either way";; esac
+out18="$(STUB_SIDEBAR_SEL=cmux.sidebar.custom.workspaces bash "$DOCTOR" 2>&1)"
+case "$out18" in *"cmux has this sidebar selected"*) ok "our selection is confirmed";;
+  *) bad "our own selection was not confirmed";; esac
+out18b="$(STUB_SIDEBAR_SEL=cmux.sidebar.custom.workspaces-2 bash "$DOCTOR" 2>&1)"
+case "$out18b" in *"showing the 'workspaces-2' sidebar, not this one"*"cmux sidebar select workspaces"*) ok "another custom sidebar is named, with the fix";;
+  *) bad "another selected sidebar went unreported";; esac
+case "$out18b" in *"cmux has this sidebar selected"*) bad "confirmed a selection that isn't ours";;
+  *) ok "no false confirmation";; esac
+out18c="$(STUB_SIDEBAR_SEL=cmux.sidebar.native bash "$DOCTOR" 2>&1)"
+case "$out18c" in *"another sidebar (cmux.sidebar.native), not this one"*) ok "an unrecognised value is shown raw";;
+  *) bad "an unrecognised selection went unreported";; esac
+# Selected but shadowed: the .js warning is the truth, so no green tick beside it.
+printf 'sidebar(() => Text("hi"))\n' > "$HOME/.config/cmux/sidebars/workspaces.js"
+out18d="$(STUB_SIDEBAR_SEL=cmux.sidebar.custom.workspaces bash "$DOCTOR" 2>&1)"
+rm -f "$HOME/.config/cmux/sidebars/workspaces.js"
+case "$out18d" in *"cmux has this sidebar selected"*) bad "confirmed a selection that a workspaces.js shadows";;
+  *) ok "a shadowed selection is not confirmed";; esac
+
+echo "T19: the socket mode cmux USES wins over what cmux.json says"
+# Baseline stub has no socket-status (cmux < 0.65.0): cmux.json is the only source.
+case "$out" in *"socketControlMode: automation (external renames allowed)"*) ok "older cmux falls back to cmux.json";;
+  *) bad "fallback to cmux.json lost";; esac
+out19="$(STUB_SOCKET='{"effective_mode":"automation","managed":false}' bash "$DOCTOR" 2>&1)"
+case "$out19" in *"socket mode in effect: automation"*) ok "the effective mode is reported";;
+  *) bad "socket-status was ignored";; esac
+out19b="$(STUB_SOCKET='{"effective_mode":"allowAll","managed":false}' bash "$DOCTOR" 2>&1)"
+case "$out19b" in *"socket mode in effect: allowAll (external renames allowed)"*) ok "allowAll also lets renames in";;
+  *) bad "allowAll was treated as rejecting renames";; esac
+# cmux.json still says automation here — the point is that it no longer decides.
+out19c="$(STUB_SOCKET='{"effective_mode":"cmuxOnly","managed":false}' bash "$DOCTOR" 2>&1)"
+case "$out19c" in *"in effect is 'cmuxOnly', not automation"*"cmux reload-config"*) ok "a rejecting mode warns despite cmux.json";;
+  *) bad "cmux.json's automation hid the mode actually in effect";; esac
+out19d="$(STUB_SOCKET='{"effective_mode":"password","managed":true,"managed_source":"com.example.profile"}' bash "$DOCTOR" 2>&1)"
+case "$out19d" in *"forced by com.example.profile"*"cmux.json can't change it"*) ok "a managed mode names its source, not cmux.json";;
+  *) bad "a managed mode was sent to edit cmux.json";; esac
+out19e="$(STUB_SOCKET='not json' bash "$DOCTOR" 2>&1)"
+case "$out19e" in *"socketControlMode: automation (external renames allowed)"*) ok "unparseable output falls back to cmux.json";;
+  *) bad "garbage from socket-status broke the check";; esac
 
 echo "RESULT: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

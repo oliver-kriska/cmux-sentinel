@@ -21,6 +21,9 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
   is used up and Codex is billing usage to credits, the row's bar line ends with the balance, e.g.
   `59.8k credits`, dimmed. It isn't there while the week still has headroom, and it never gets a
   bar of its own, because a balance has no ceiling to fill.
+- **The doctor says when cmux is showing a different sidebar.** cmux 0.65.0's template gallery can
+  install a `workspaces-2.js` and switch to it, which hides this sidebar while every check stays
+  green. The doctor now names the sidebar that is selected and the command that switches back.
 
 ### Changed
 
@@ -32,6 +35,9 @@ curl -fsSL https://raw.githubusercontent.com/oliver-kriska/cmux-sentinel/main/in
   or renews, or how old the last good reading is when the poller can't refresh. The `×` says what it
   does. The workspace name, the `*` and the unread count carry descriptions as accessibility help;
   cmux didn't show a hover bubble for the name.
+- **The doctor checks the socket mode cmux is actually using.** On cmux 0.65.0 and later it asks
+  `cmux socket-status`, so a mode forced by a managed profile, or set somewhere other than
+  `cmux.json`, is reported correctly. Older cmux versions still read `cmux.json`.
 - **The header clock shows hours and minutes.** The seconds digit changed every second in the corner
   of your eye.
 
